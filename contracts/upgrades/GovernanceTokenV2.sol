@@ -75,9 +75,11 @@ contract GovernanceTokenV2 is
     uint32 public tge;
     /// @dev Upgrade request structure
     UpgradeRequest public pendingUpgrade;
+    /// @dev number of active chains in the ecosystem
+    uint32 public activeChains;
     /// @dev the CCIPAdmin can be used to register with the CCIP token admin registry, but has no other special powers,
     /// and can only be transferred by the owner.
-    address internal s_ccipAdmin;
+    address internal ccipAdmin;
     /// @dev Storage gap for future upgrades
     uint256[47] private __gap;
 
@@ -110,11 +112,19 @@ contract GovernanceTokenV2 is
     event MaxBridgeUpdated(address indexed admin, uint256 oldMaxBridge, uint256 newMaxBridge);
 
     /**
+     * @dev Emitted when the maximum bridge amount is updated
+     * @param admin The address that updated the value
+     * @param oldActiveChains Previous maximum bridge amount
+     * @param newActiveChains New maximum bridge amount
+     */
+    event ActiveChainsUpdated(address indexed admin, uint32 oldActiveChains, uint32 newActiveChains);
+
+    /**
      * @dev Emitted when a bridge role is assigned
      * @param admin The admin who set the role
-     * @param rounterAddress The bridge address receiving the role
+     * @param bridgeAddress The bridge address receiving the role
      */
-    event BridgeRoleAssigned(address indexed admin, address indexed rounterAddress);
+    event BridgeRoleAssigned(address indexed admin, address indexed bridgeAddress);
 
     /**
      * @dev Emitted when an upgrade is scheduled
@@ -156,8 +166,8 @@ contract GovernanceTokenV2 is
     /// @dev Error thrown when an amount parameter is zero
     error ZeroAmount();
 
-    // /// @dev Error thrown when a mint would exceed the max supply
-    // error MaxSupplyExceeded(uint256 requested, uint256 maxAllowed);
+    /// @dev Error thrown when a mint would exceed the max supply
+    error MaxSupplyExceeded(uint256 requested, uint256 maxAllowed);
 
     /// @dev Error thrown when bridge amount exceeds allowed limit
     error BridgeAmountExceeded(uint256 requested, uint256 maxAllowed);
@@ -179,9 +189,6 @@ contract GovernanceTokenV2 is
 
     /// @dev Error thrown for general validation failures
     error ValidationFailed(string reason);
-
-    /// @dev Error thrown when MAX_SUPPLY is exceeded by the mint function (ccip bridge)
-    error MaxSupplyExceeded(uint256 supplyAfterMint);
 
     /// @dev Error thrown when the recipient address is invalid
     error InvalidRecipient(address recipient);
@@ -243,10 +250,54 @@ contract GovernanceTokenV2 is
 
         initialSupply = INITIAL_SUPPLY;
         maxBridge = DEFAULT_MAX_BRIDGE_AMOUNT;
-        // _mint(guardian, INITIAL_SUPPLY); for testing CCP only
 
         version = 1;
+        activeChains = 1;
         emit Initialized(msg.sender);
+    }
+
+    /**
+     * @dev Sets the bridge address with BRIDGE_ROLE
+     * @param bridgeAddress The address of the bridge contract
+     * @custom:requires-role MANAGER_ROLE
+     * @custom:throws ZeroAddress if bridgeAddress is zero
+     */
+    function setBridgeAddress(address bridgeAddress) external onlyRole(MANAGER_ROLE) {
+        if (bridgeAddress == address(0)) revert ZeroAddress();
+
+        _grantRole(BRIDGE_ROLE, bridgeAddress);
+
+        emit BridgeRoleAssigned(msg.sender, bridgeAddress);
+    }
+
+    /**
+     * @dev Initializes the Token Generation Event (TGE).
+     * @notice Sets up the initial token distribution between the ecosystem and treasury contracts.
+     * @param ecosystem The address of the ecosystem contract.
+     * @param treasury The address of the treasury contract.
+     * @custom:requires The ecosystem and treasury addresses must not be zero.
+     * @custom:requires TGE must not be already initialized.
+     * @custom:events-emits {TGE} event.
+     * @custom:throws ZeroAddress if any address is zero.
+     * @custom:throws TGEAlreadyInitialized if TGE was already initialized.
+     */
+    function initializeTGE(address ecosystem, address treasury) external onlyRole(TGE_ROLE) {
+        if (ecosystem == address(0)) {
+            revert InvalidAddress(ecosystem, "Ecosystem address cannot be zero");
+        }
+        if (treasury == address(0)) {
+            revert InvalidAddress(treasury, "Treasury address cannot be zero");
+        }
+        if (tge > 0) revert TGEAlreadyInitialized();
+
+        ++tge;
+
+        // Directly mint to target addresses instead of minting to this contract first
+        _mint(treasury, TREASURY_SHARE);
+        _mint(ecosystem, ECOSYSTEM_SHARE);
+        _mint(msg.sender, DEPLOYER_SHARE);
+
+        emit TGE(initialSupply);
     }
 
     /**
@@ -291,6 +342,17 @@ contract GovernanceTokenV2 is
         emit MaxBridgeUpdated(msg.sender, oldMaxBridge, newMaxBridge);
     }
 
+    function updateActiveChains(uint32 newActiveChains)
+        external
+        nonZeroAmount(newActiveChains)
+        onlyRole(MANAGER_ROLE)
+    {
+        uint32 oldActiveChains = activeChains;
+        if (newActiveChains < oldActiveChains) revert ValidationFailed("Invalid chains number");
+        activeChains = newActiveChains;
+
+        emit ActiveChainsUpdated(msg.sender, oldActiveChains, newActiveChains);
+    }
     /**
      * @dev Schedules an upgrade to a new implementation
      * @param newImplementation Address of the new implementation
@@ -299,6 +361,7 @@ contract GovernanceTokenV2 is
      * @custom:events-emits {UpgradeScheduled} event
      * @custom:throws ZeroAddress if newImplementation is zero
      */
+
     function scheduleUpgrade(address newImplementation)
         external
         nonZeroAddress(newImplementation)
@@ -325,6 +388,34 @@ contract GovernanceTokenV2 is
         emit UpgradeCancelled(msg.sender, implementation);
     }
 
+    // ================================================================
+    // │                       CCIP Roles                             │
+    // ================================================================
+
+    /// @notice grants both mint and burn roles to `burnAndMinter`.
+    /// @dev calls public functions so this function does not require
+    /// access controls. This is handled in the inner functions.
+    function grantMintAndBurnRoles(address burnAndMinter) external {
+        grantRole(BRIDGE_ROLE, burnAndMinter);
+    }
+
+    /// @notice Transfers the CCIPAdmin role to a new address
+    /// @dev only the owner can call this function, NOT the current ccipAdmin, and 1-step ownership transfer is used.
+    /// @param newAdmin The address to transfer the CCIPAdmin role to. Setting to address(0) is a valid way to revoke
+    /// the role
+    function setCCIPAdmin(address newAdmin) external onlyRole(MANAGER_ROLE) {
+        address currentAdmin = ccipAdmin;
+
+        ccipAdmin = newAdmin;
+
+        emit CCIPAdminTransferred(currentAdmin, newAdmin);
+    }
+
+    /// @notice Returns the current CCIPAdmin
+    function getCCIPAdmin() external view returns (address) {
+        return ccipAdmin;
+    }
+
     /**
      * @dev Returns the remaining time before a scheduled upgrade can be executed
      * @return The time remaining in seconds, or 0 if no upgrade is scheduled or timelock has passed
@@ -335,10 +426,92 @@ contract GovernanceTokenV2 is
             : 0;
     }
 
+    // ================================================================
+    // │     NEW Chainlink CCIP CCT SECTION                           │
+    // ================================================================
+
+    /**
+     * @dev Mints tokens for cross-chain bridge transfers
+     * @param account Address receiving the tokens
+     * @param amount Amount to mint
+     * @notice Can only be called by the official Bridge contract
+     * @custom:requires-role BRIDGE_ROLE
+     * @custom:requires Total supply must not exceed initialSupply
+     * @custom:requires to address must not be zero
+     * @custom:requires amount must not be zero or exceed maxBridge limit
+     * @custom:events-emits {BridgeMint} event
+     * @custom:throws ZeroAddress if recipient address is zero
+     * @custom:throws ZeroAmount if amount is zero
+     * @custom:throws BridgeAmountExceeded if amount exceeds maxBridge
+     * @custom:throws MaxSupplyExceeded if the mint would exceed initialSupply
+     */
+    function mint(address account, uint256 amount)
+        public
+        nonZeroAddress(account)
+        nonZeroAmount(amount)
+        whenNotPaused
+        onlyRole(BRIDGE_ROLE)
+    {
+        if (account == address(this)) revert InvalidRecipient(account);
+
+        // Cache maxBridge to avoid double storage read
+        uint256 maxBridgeAmount = maxBridge;
+        if (amount > maxBridgeAmount) {
+            revert BridgeAmountExceeded(amount, maxBridgeAmount);
+        }
+
+        // Supply constraint validation
+        uint256 allowedSupply = initialSupply * activeChains;
+        uint256 newSupply = totalSupply() + amount;
+        if (newSupply > allowedSupply) {
+            revert MaxSupplyExceeded(newSupply, allowedSupply);
+        }
+
+        // Mint tokens
+        _mint(account, amount);
+
+        // Emit event
+        emit BridgeMint(msg.sender, account, amount);
+    }
+
+    /// @inheritdoc ERC20BurnableUpgradeable
+    /// @dev Uses OZ ERC20 _burn to disallow burning from address(0).
+    /// @dev Decreases the total supply.
+    function burn(uint256 amount) public override(IBurnMintERC20, ERC20BurnableUpgradeable) {
+        super.burn(amount);
+    }
+
+    /// @inheritdoc IBurnMintERC20
+    /// @dev Alias for BurnFrom for compatibility with the older naming convention.
+    /// @dev Uses burnFrom for all validation & logic.
+    function burn(address account, uint256 amount) public virtual override {
+        burnFrom(account, amount);
+    }
+
+    /// @inheritdoc ERC20BurnableUpgradeable
+    /// @dev Uses OZ ERC20 _burn to disallow burning from address(0).
+    /// @dev Decreases the total supply.
+    function burnFrom(address account, uint256 amount) public override(IBurnMintERC20, ERC20BurnableUpgradeable) {
+        super.burnFrom(account, amount);
+    }
+
     // The following functions are overrides required by Solidity.
     /// @inheritdoc ERC20PermitUpgradeable
     function nonces(address owner) public view override(ERC20PermitUpgradeable, NoncesUpgradeable) returns (uint256) {
         return super.nonces(owner);
+    }
+
+    /// @inheritdoc IERC165
+    function supportsInterface(bytes4 interfaceId)
+        public
+        pure
+        virtual
+        override(AccessControlUpgradeable, IERC165)
+        returns (bool)
+    {
+        return interfaceId == type(IERC20).interfaceId || interfaceId == type(IBurnMintERC20).interfaceId
+            || interfaceId == type(IERC165).interfaceId || interfaceId == type(IAccessControl).interfaceId
+            || interfaceId == type(IGetCCIPAdmin).interfaceId;
     }
 
     /// @inheritdoc ERC20Upgradeable
@@ -379,114 +552,5 @@ contract GovernanceTokenV2 is
 
         // Emit the upgrade event
         emit Upgrade(msg.sender, newImplementation);
-    }
-
-    // ================================================================
-    // │     NEW Chainlink CCIP CCT SECTION                           │
-    // ================================================================
-
-    /// @inheritdoc IERC165
-    function supportsInterface(bytes4 interfaceId)
-        public
-        pure
-        virtual
-        override(AccessControlUpgradeable, IERC165)
-        returns (bool)
-    {
-        return interfaceId == type(IERC20).interfaceId || interfaceId == type(IBurnMintERC20).interfaceId
-            || interfaceId == type(IERC165).interfaceId || interfaceId == type(IAccessControl).interfaceId
-            || interfaceId == type(IGetCCIPAdmin).interfaceId;
-    }
-
-    /**
-     * @dev Mints tokens for cross-chain bridge transfers
-     * @param account Address receiving the tokens
-     * @param amount Amount to mint
-     * @notice Can only be called by the official Bridge contract
-     * @custom:requires-role BRIDGE_ROLE
-     * @custom:requires Total supply must not exceed initialSupply
-     * @custom:requires to address must not be zero
-     * @custom:requires amount must not be zero or exceed maxBridge limit
-     * @custom:events-emits {BridgeMint} event
-     * @custom:throws ZeroAddress if recipient address is zero
-     * @custom:throws ZeroAmount if amount is zero
-     * @custom:throws BridgeAmountExceeded if amount exceeds maxBridge
-     * @custom:throws MaxSupplyExceeded if the mint would exceed initialSupply
-     */
-    function mint(address account, uint256 amount)
-        public
-        nonZeroAddress(account)
-        nonZeroAmount(amount)
-        whenNotPaused
-        onlyRole(BRIDGE_ROLE)
-    {
-        if (account == address(this)) revert InvalidRecipient(account);
-
-        // Cache maxBridge to avoid double storage read
-        uint256 maxBridgeAmount = maxBridge;
-        if (amount > maxBridgeAmount) {
-            revert BridgeAmountExceeded(amount, maxBridgeAmount);
-        }
-
-        // Supply constraint validation
-        uint256 newSupply = totalSupply() + amount;
-        if (newSupply > initialSupply) {
-            revert MaxSupplyExceeded(newSupply);
-        }
-
-        // Mint tokens
-        _mint(account, amount);
-
-        // Emit event
-        emit BridgeMint(msg.sender, account, amount);
-    }
-
-    /// @inheritdoc ERC20BurnableUpgradeable
-    /// @dev Uses OZ ERC20 _burn to disallow burning from address(0).
-    /// @dev Decreases the total supply.
-    function burn(uint256 amount) public override(IBurnMintERC20, ERC20BurnableUpgradeable) {
-        super.burn(amount);
-    }
-
-    /// @inheritdoc IBurnMintERC20
-    /// @dev Alias for BurnFrom for compatibility with the older naming convention.
-    /// @dev Uses burnFrom for all validation & logic.
-    function burn(address account, uint256 amount) public virtual override {
-        burnFrom(account, amount);
-    }
-
-    /// @inheritdoc ERC20BurnableUpgradeable
-    /// @dev Uses OZ ERC20 _burn to disallow burning from address(0).
-    /// @dev Decreases the total supply.
-    function burnFrom(address account, uint256 amount) public override(IBurnMintERC20, ERC20BurnableUpgradeable) {
-        super.burnFrom(account, amount);
-    }
-
-    // ================================================================
-    // │                       CCIP Roles                             │
-    // ================================================================
-
-    /// @notice grants both mint and burn roles to `burnAndMinter`.
-    /// @dev calls public functions so this function does not require
-    /// access controls. This is handled in the inner functions.
-    function grantMintAndBurnRoles(address burnAndMinter) external {
-        grantRole(BRIDGE_ROLE, burnAndMinter);
-    }
-
-    /// @notice Returns the current CCIPAdmin
-    function getCCIPAdmin() external view returns (address) {
-        return s_ccipAdmin;
-    }
-
-    /// @notice Transfers the CCIPAdmin role to a new address
-    /// @dev only the owner can call this function, NOT the current ccipAdmin, and 1-step ownership transfer is used.
-    /// @param newAdmin The address to transfer the CCIPAdmin role to. Setting to address(0) is a valid way to revoke
-    /// the role
-    function setCCIPAdmin(address newAdmin) external onlyRole(MANAGER_ROLE) {
-        address currentAdmin = s_ccipAdmin;
-
-        s_ccipAdmin = newAdmin;
-
-        emit CCIPAdminTransferred(currentAdmin, newAdmin);
     }
 }

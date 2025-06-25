@@ -187,7 +187,7 @@ contract LendefiCoreTest is BasicDeploy {
 
         vm.expectRevert(); // Expect revert for already initialized
         marketCoreInstance.initialize(
-            address(timelockInstance), charlie, address(tokenInstance), address(assetsInstance), address(vaultImpl)
+            address(timelockInstance), charlie, address(tokenInstance), address(vaultImpl)
         );
     }
 
@@ -200,10 +200,9 @@ contract LendefiCoreTest is BasicDeploy {
         bytes memory initData = abi.encodeWithSelector(
             LendefiCore.initialize.selector,
             address(0), // zero admin - should revert
-            address(tokenInstance),
-            address(assetsInstance),
-            address(treasuryInstance),
-            address(vaultImpl2)
+            charlie, // marketOwner
+            address(tokenInstance), // govToken
+            address(vaultImpl2) // positionVault
         );
 
         vm.expectRevert(); // Expect revert for zero address

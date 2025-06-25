@@ -339,11 +339,10 @@ interface ILendefiMarketFactory {
     function pendingUpgrade() external view returns (address implementation, uint64 scheduledTime, bool exists);
 
     /**
-     * @notice Returns all market owner addresses
-     * @param index The index to query
-     * @return The market owner address at the given index
+     * @notice Returns all market owners as an array
+     * @return Array of all market owner addresses
      */
-    function allMarketOwners(uint256 index) external view returns (address);
+    function getAllMarketOwners() external view returns (address[] memory);
 
     /**
      * @notice Checks if a base asset is allowed for market creation

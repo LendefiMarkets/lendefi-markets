@@ -44,6 +44,9 @@ contract LendefiMarketFactory is ILendefiMarketFactory, Initializable, AccessCon
 
     /**
      * @notice Information about a scheduled contract upgrade
+     */
+    /**
+     * @notice Struct to track pending upgrade requests
      * @param implementation Address of the new implementation contract
      * @param scheduledTime Timestamp when the upgrade was scheduled
      * @param exists Whether an upgrade request exists
@@ -95,11 +98,12 @@ contract LendefiMarketFactory is ILendefiMarketFactory, Initializable, AccessCon
     /// @dev Handles governance token rewards for liquidity providers
     address public ecosystem;
 
-    /// @notice Network-specific addresses for oracle validation
-    /// @dev Set during initialization to support different networks
+    /// @notice Network-specific USDC address
     address public networkUSDC;
+
     /// @notice Network-specific WETH address
     address public networkWETH;
+
     /// @notice Uniswap pool address for USDC/WETH
     address public usdcWethPool;
 
@@ -116,9 +120,9 @@ contract LendefiMarketFactory is ILendefiMarketFactory, Initializable, AccessCon
     /// @dev Key: market owner address, Value: EnumerableSet of base asset addresses they've created markets for
     mapping(address => EnumerableSet.AddressSet) internal ownerBaseAssets;
 
-    /// @notice Array of all market owners who have created markets
-    /// @dev Used for enumeration and iteration over all market owners
-    address[] public allMarketOwners;
+    /// @notice Set of all market owners who have created markets
+    /// @dev Used for enumeration and iteration over all market owners with guaranteed uniqueness
+    EnumerableSet.AddressSet internal allMarketOwners;
 
     /// @notice Array of all market configurations created by this factory
     /// @dev Provides direct access to all market data across all owners
@@ -129,7 +133,7 @@ contract LendefiMarketFactory is ILendefiMarketFactory, Initializable, AccessCon
 
     /// @notice Storage gap for future upgrades
     /// @dev Storage gap reduced to account for new variables
-    uint256[11] private __gap;
+    uint256[13] private __gap;
 
     // ========== MODIFIERS ==========
 
@@ -547,29 +551,40 @@ contract LendefiMarketFactory is ILendefiMarketFactory, Initializable, AccessCon
 
     /**
      * @notice Returns the total number of market owners
-     * @dev Returns the length of the allMarketOwners array
+     * @dev Returns the length of the allMarketOwners set
      * @return Total number of unique market owners
      *
      * @custom:access-control Available to any caller (view function)
      */
     function getMarketOwnersCount() external view returns (uint256) {
-        return allMarketOwners.length;
+        return allMarketOwners.length();
     }
 
     /**
      * @notice Returns a market owner address by index
-     * @dev Retrieves an owner address from the allMarketOwners array
+     * @dev Retrieves an owner address from the allMarketOwners set
      * @param index The index of the owner to retrieve
      * @return Address of the market owner at the specified index
      *
      * @custom:requirements
-     *   - index must be less than allMarketOwners.length
+     *   - index must be less than allMarketOwners.length()
      *
      * @custom:access-control Available to any caller (view function)
      */
     function getMarketOwnerByIndex(uint256 index) external view returns (address) {
-        if (index >= allMarketOwners.length) revert InvalidIndex();
-        return allMarketOwners[index];
+        if (index >= allMarketOwners.length()) revert InvalidIndex();
+        return allMarketOwners.at(index);
+    }
+
+    /**
+     * @notice Returns all market owners as an array
+     * @dev Retrieves all unique market owner addresses
+     * @return Array of all market owner addresses
+     *
+     * @custom:access-control Available to any caller (view function)
+     */
+    function getAllMarketOwners() external view returns (address[] memory) {
+        return allMarketOwners.values();
     }
 
     /**
@@ -726,17 +741,16 @@ contract LendefiMarketFactory is ILendefiMarketFactory, Initializable, AccessCon
         markets[marketOwner][baseAsset] = marketInfo;
 
         // Track base assets for this owner
-        bool isFirstAsset = ownerBaseAssets[marketOwner].length() == 0;
+        // This is guaranteed to succeed since we already verified the market doesn't exist
         ownerBaseAssets[marketOwner].add(baseAsset);
 
-        // Track unique market owners (only add if this is their first market)
-        if (isFirstAsset) {
-            allMarketOwners.push(marketOwner);
-        }
+        // Track unique market owners (returns false if already exists, which is fine)
+        allMarketOwners.add(marketOwner);
 
         // Add to global markets array
         allMarkets.push(marketInfo);
     }
+
     // ========== UUPS UPGRADE AUTHORIZATION ==========
 
     /**

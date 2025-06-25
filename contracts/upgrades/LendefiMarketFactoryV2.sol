@@ -22,16 +22,16 @@ pragma solidity 0.8.23;
  */
 
 import {LendefiCore} from "../markets/LendefiCore.sol";
+import {LendefiAssets} from "../markets/LendefiAssets.sol";
 import {LendefiMarketVault} from "../markets/LendefiMarketVault.sol";
+import {IPoRFeed} from "../interfaces/IPoRFeed.sol";
 import {IPROTOCOL} from "../interfaces/IProtocol.sol";
 import {ILendefiMarketFactory} from "../interfaces/ILendefiMarketFactory.sol";
-import {IASSETS} from "../interfaces/IASSETS.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {IPoRFeed} from "../interfaces/IPoRFeed.sol";
 import {LendefiConstants} from "../markets/lib/LendefiConstants.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -666,7 +666,7 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
 
         // Initialize assets module contract through proxy
         bytes memory assetsInitData = abi.encodeWithSelector(
-            IASSETS.initialize.selector,
+            LendefiAssets.initialize.selector,
             timelock,
             msg.sender,
             porFeedImplementation,

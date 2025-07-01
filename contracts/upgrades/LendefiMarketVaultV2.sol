@@ -246,6 +246,16 @@ contract LendefiMarketVaultV2 is
         _;
     }
 
+    /// @notice Prevents MEV attacks by ensuring no same-block operations for a user
+    /// @param user The user address to check for MEV protection
+    modifier noMEV(address user) {
+        uint256 lastOperationBlock = liquidityOperationBlock[user];
+        uint256 currentBlock = block.number;
+        if (lastOperationBlock >= currentBlock) revert MEVSameBlockOperation();
+        liquidityOperationBlock[user] = currentBlock;
+        _;
+    }
+
     // ========== CONSTRUCTOR ==========
 
     /// @notice Disables initializers to prevent implementation contract initialization
@@ -271,8 +281,8 @@ contract LendefiMarketVaultV2 is
      * @param baseAsset Address of the ERC20 token used as the base asset
      * @param _ecosystem Address of the ecosystem contract for reward distribution
      * @param _assetsModule Address of the assets module contract for asset management
-     * @param name Name for the ERC20 vault token (e.g., "Lendefi USDC Vault")
-     * @param symbol Symbol for the ERC20 vault token (e.g., "lendUSDC")
+     * @param _name Name for the ERC20 vault token (e.g., "Lendefi USDC Vault")
+     * @param _symbol Symbol for the ERC20 vault token (e.g., "lendUSDC")
      *
      * @custom:requirements
      *   - All address parameters must be non-zero
@@ -298,8 +308,8 @@ contract LendefiMarketVaultV2 is
         address baseAsset,
         address _ecosystem,
         address _assetsModule,
-        string memory name,
-        string memory symbol
+        string memory _name,
+        string memory _symbol
     ) external initializer {
         if (baseAsset == address(0)) revert ZeroAddress();
         if (_timelock == address(0)) revert ZeroAddress();
@@ -319,7 +329,7 @@ contract LendefiMarketVaultV2 is
         IPoRFeed(porFeed).initialize(baseAsset, address(this), _timelock);
 
         __ERC4626_init(IERC20(baseAsset));
-        __ERC20_init(name, symbol);
+        __ERC20_init(_name, _symbol);
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
@@ -524,15 +534,17 @@ contract LendefiMarketVaultV2 is
      *   - Increments counter for tracking automation calls
      *   - Updates the PoR feed with current TVL data
      *
-     * @param performData Encoded data for upkeep (unused in this implementation)
+     * @param performData Encoded data from checkUpkeep (unused)
      * @custom:emits CollateralizationAlert when protocol becomes undercollateralized
      * @custom:automation Part of Chainlink's AutomationCompatibleInterface
      * @custom:interval Updates occur based on the interval state variable (default 12 hours)
      */
     function performUpkeep(bytes calldata performData) external override {
-        if ((block.timestamp - lastTimeStamp) > interval) {
-            lastTimeStamp = block.timestamp;
-            counter = counter + 1;
+        // performData is unused as this implementation doesn't require input data
+        uint256 currentTimestamp = block.timestamp;
+        if ((currentTimestamp - lastTimeStamp) > interval) {
+            lastTimeStamp = currentTimestamp;
+            counter += 1;
 
             // Use the stored TVL value instead of parameter
             (bool collateralized, uint256 tvl) = IPROTOCOL(lendefiCore).isCollateralized();
@@ -541,7 +553,7 @@ contract LendefiMarketVaultV2 is
             IPoRFeed(porFeed).updateReserves(tvl);
             if (!collateralized) {
                 performData;
-                emit CollateralizationAlert(block.timestamp, tvl, totalSupply());
+                emit CollateralizationAlert(currentTimestamp, tvl, totalSupply());
             }
         }
     }
@@ -639,7 +651,7 @@ contract LendefiMarketVaultV2 is
      * @dev This view function is called by Chainlink Automation infrastructure to
      *      determine whether performUpkeep should be executed. The upkeep is needed
      *      when sufficient time has elapsed since the last Proof of Reserves update.
-     * @param checkData Encoded check data (unused in this implementation)
+     * @param checkData Encoded data to determine if upkeep is needed (unused)
      * @return upkeepNeeded Boolean indicating whether performUpkeep should be called
      * @return performData Encoded data to pass to performUpkeep (returns empty bytes)
      *
@@ -653,8 +665,10 @@ contract LendefiMarketVaultV2 is
         override
         returns (bool upkeepNeeded, bytes memory performData)
     {
+        // checkData is unused as this implementation doesn't require input data
+        checkData;
         upkeepNeeded = (block.timestamp - lastTimeStamp) > interval;
-        performData = checkData;
+        performData = "0x00";
     }
 
     /**
@@ -690,14 +704,9 @@ contract LendefiMarketVaultV2 is
         validAddress(receiver)
         whenNotPaused
         nonReentrant
+        noMEV(receiver)
         returns (uint256)
     {
-        // MEV protection: prevent same-block operations
-        uint256 lastOperationBlock = liquidityOperationBlock[receiver];
-        uint256 currentBlock = block.number;
-        if (lastOperationBlock >= currentBlock) revert MEVSameBlockOperation();
-        liquidityOperationBlock[receiver] = currentBlock;
-
         uint256 shares = super.deposit(amount, receiver);
         totalBase += amount;
         totalSuppliedLiquidity += amount;
@@ -735,14 +744,9 @@ contract LendefiMarketVaultV2 is
         validAddress(receiver)
         whenNotPaused
         nonReentrant
+        noMEV(receiver)
         returns (uint256)
     {
-        // MEV protection: prevent same-block operations
-        uint256 lastOperationBlock = liquidityOperationBlock[receiver];
-        uint256 currentBlock = block.number;
-        if (lastOperationBlock >= currentBlock) revert MEVSameBlockOperation();
-        liquidityOperationBlock[receiver] = currentBlock;
-
         uint256 amount = super.mint(shares, receiver);
         totalBase += amount;
         totalSuppliedLiquidity += amount;
@@ -783,14 +787,9 @@ contract LendefiMarketVaultV2 is
         validAmount(amount)
         whenNotPaused
         nonReentrant
+        noMEV(owner)
         returns (uint256)
     {
-        // MEV protection: prevent same-block operations
-        uint256 lastOperationBlock = liquidityOperationBlock[owner];
-        uint256 currentBlock = block.number;
-        if (lastOperationBlock >= currentBlock) revert MEVSameBlockOperation();
-        liquidityOperationBlock[owner] = currentBlock;
-
         // Calculate and collect fees before withdrawal
         uint256 fee = _calculateVirtualFeeShares();
         uint256 totalSharesBeforeWithdraw = totalSupply();
@@ -801,8 +800,9 @@ contract LendefiMarketVaultV2 is
         totalSuppliedLiquidity -= baseAmount;
 
         if (fee > 0) {
-            _mint(timelock, fee);
-            emit ProtocolFeesCollected(timelock, fee);
+            address cachedTimelock = timelock;
+            _mint(cachedTimelock, fee);
+            emit ProtocolFeesCollected(cachedTimelock, fee);
         }
 
         return shares;
@@ -842,14 +842,9 @@ contract LendefiMarketVaultV2 is
         validAddress(owner)
         whenNotPaused
         nonReentrant
+        noMEV(owner)
         returns (uint256)
     {
-        // MEV protection: prevent same-block operations
-        uint256 lastOperationBlock = liquidityOperationBlock[owner];
-        uint256 currentBlock = block.number;
-        if (lastOperationBlock >= currentBlock) revert MEVSameBlockOperation();
-        liquidityOperationBlock[owner] = currentBlock;
-
         // Calculate and collect fees before redemption
         uint256 fee = _calculateVirtualFeeShares();
         uint256 totalSharesBeforeRedeem = totalSupply();
@@ -862,8 +857,9 @@ contract LendefiMarketVaultV2 is
         totalSuppliedLiquidity -= baseAmount;
 
         if (fee > 0) {
-            _mint(timelock, fee);
-            emit ProtocolFeesCollected(timelock, fee);
+            address cachedTimelock = timelock;
+            _mint(cachedTimelock, fee);
+            emit ProtocolFeesCollected(cachedTimelock, fee);
         }
 
         return amount;
@@ -898,10 +894,11 @@ contract LendefiMarketVaultV2 is
         whenNotPaused
         nonReentrant
     {
-        if (totalBorrow + amount > totalSuppliedLiquidity) {
+        uint256 newTotalBorrow = totalBorrow + amount;
+        if (newTotalBorrow > totalSuppliedLiquidity) {
             revert LowLiquidity();
         }
-        totalBorrow += amount;
+        totalBorrow = newTotalBorrow;
 
         borrowerDebt[receiver] += amount; // Track by actual borrower
         IERC20(asset()).safeTransfer(receiver, amount);
@@ -962,12 +959,11 @@ contract LendefiMarketVaultV2 is
 
     /**
      * @notice Calculates the current utilization rate of the vault's liquidity
-     * @dev Utilization rate indicates how much of the supplied liquidity is currently
-     *      borrowed. It's calculated as (totalBorrow / totalSuppliedLiquidity) and
-     *      expressed in baseDecimals format (e.g., 0.5e6 = 50% utilization).
-     * @return u The protocol's current utilization rate scaled by baseDecimals
+     * @dev Utilization rate indicates what percentage of the supplied liquidity is currently
+     *      borrowed. Returned value is normalized to 1e6 (e.g., 0.5e6 = 50% utilization).
+     * @return u The protocol's current utilization rate normalized to 1e6
      *
-     * @custom:formula u = (baseDecimals × totalBorrow) ÷ totalSuppliedLiquidity
+     * @custom:formula u = (1e6 × totalBorrow) ÷ totalSuppliedLiquidity
      * @custom:gas-optimization Caches storage reads to minimize SLOAD operations
      * @custom:edge-cases Returns 0 when no liquidity supplied or no borrowing activity
      */
@@ -976,9 +972,11 @@ contract LendefiMarketVaultV2 is
         uint256 cachedSupply = totalSuppliedLiquidity;
         uint256 cachedBorrow = totalBorrow;
 
-        (cachedSupply == 0 || cachedBorrow == 0)
-            ? u = 0
-            : u = Math.mulDiv(baseDecimals, cachedBorrow, cachedSupply, Math.Rounding.Floor);
+        if (cachedSupply == 0 || cachedBorrow == 0) {
+            return 0;
+        }
+
+        return Math.mulDiv(1e6, cachedBorrow, cachedSupply, Math.Rounding.Floor);
     }
 
     /**
@@ -1018,8 +1016,7 @@ contract LendefiMarketVaultV2 is
      * @return The current annual supply interest rate in parts per million (1e6 = 100%)
      */
     function getSupplyRate() public view returns (uint256) {
-        uint256 supply = totalSupply();
-        if (supply == 0) return 0;
+        if (totalSupply() == 0) return 0;
 
         // Calculate the current value of 1 share unit (using baseDecimals precision)
         uint256 shareValue = previewRedeem(baseDecimals);
@@ -1036,15 +1033,13 @@ contract LendefiMarketVaultV2 is
      * @return The current annual borrow interest rate in 1e6 format
      */
     function getBorrowRate(IASSETS.CollateralTier tier) public view returns (uint256) {
-        // Normalize utilization to 1e6 format for consistent rate calculations
-        uint256 utilizationIn1e6 = Math.mulDiv(utilization(), 1e6, baseDecimals, Math.Rounding.Floor);
-
+        ILendefiMarketVault.ProtocolConfig memory config = protocolConfig;
         return LendefiRates.getBorrowRate(
-            utilizationIn1e6,
-            protocolConfig.borrowRate, // already in 1e6
-            protocolConfig.profitTargetRate, // already in 1e6
-            getSupplyRate(), // now returns 1e6
-            IASSETS(assetsModule).getTierJumpRate(tier) // assume 1e6
+            utilization(),
+            config.borrowRate,
+            config.profitTargetRate,
+            getSupplyRate(),
+            IASSETS(assetsModule).getTierJumpRate(tier)
         );
     }
 
@@ -1054,8 +1049,8 @@ contract LendefiMarketVaultV2 is
      * @dev Internal function called by the UUPS upgrade mechanism to verify
      *      that the caller has permission to upgrade the contract implementation.
      *      Also increments the version number for tracking purposes.
-     * @param newImplementation Address of the new implementation contract
      *
+     * @param newImplementation Address of the new implementation (unused in authorization)
      * @custom:access-control Restricted to UPGRADER_ROLE
      * @custom:state-changes Increments version number with each upgrade
      * @custom:upgrade-safety Ensures only authorized parties can upgrade the vault
@@ -1068,12 +1063,10 @@ contract LendefiMarketVaultV2 is
     /**
      * @dev Calculates the virtual fee shares that would be minted if fees were collected now.
      * This represents the protocol's earned but uncollected commission.
-     * @return The number of virtual shares representing uncollected fees
+     * @return virtualShares Number of shares representing uncollected protocol fees
      */
     function _calculateVirtualFeeShares() internal view returns (uint256) {
-        uint256 supply = totalSupply();
-        if (supply == 0) return 0;
-
+        if (totalSupply() == 0) return 0;
         uint256 target =
             Math.mulDiv(totalSuppliedLiquidity, protocolConfig.profitTargetRate, baseDecimals, Math.Rounding.Floor);
 
@@ -1086,9 +1079,9 @@ contract LendefiMarketVaultV2 is
     /**
      * @dev Internal conversion function (from assets to shares) with support for rounding direction.
      * Modified to account for protocol commission by adjusting the total supply calculation.
-     * @param assets Amount of assets to convert
-     * @param rounding Math rounding mode to use
-     * @return Number of shares equivalent to the asset amount
+     * @param assets Amount of assets to convert to shares
+     * @param rounding Rounding direction for the conversion
+     * @return shares Equivalent number of shares for the given assets
      */
     function _convertToShares(uint256 assets, Math.Rounding rounding)
         internal
@@ -1106,9 +1099,9 @@ contract LendefiMarketVaultV2 is
     /**
      * @dev Internal conversion function (from shares to assets) with support for rounding direction.
      * Modified to account for protocol commission by adjusting the total supply calculation.
-     * @param shares Number of shares to convert
-     * @param rounding Math rounding mode to use
-     * @return Amount of assets equivalent to the shares
+     * @param shares Number of shares to convert to assets
+     * @param rounding Rounding direction for the conversion
+     * @return assets Equivalent amount of assets for the given shares
      */
     function _convertToAssets(uint256 shares, Math.Rounding rounding)
         internal

@@ -350,12 +350,7 @@ interface IPROTOCOL {
      * @param govToken_ The address of the governance token
      * @param vaultImplementation The address of the vault implementation contract
      */
-    function initialize(
-        address admin,
-        address marketOwner,
-        address govToken_,
-        address vaultImplementation
-    ) external;
+    function initialize(address admin, address marketOwner, address govToken_, address vaultImplementation) external;
 
     /**
      * @notice Initializes the market with market info

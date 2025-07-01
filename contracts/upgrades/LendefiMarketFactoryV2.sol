@@ -31,16 +31,28 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {LendefiConstants} from "../markets/lib/LendefiConstants.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /// @custom:oz-upgrades-from contracts/markets/LendefiMarketFactory.sol:LendefiMarketFactory
-contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessControlUpgradeable, UUPSUpgradeable {
+contract LendefiMarketFactoryV2 is
+    ILendefiMarketFactory,
+    Initializable,
+    AccessControlUpgradeable,
+    ReentrancyGuardUpgradeable,
+    PausableUpgradeable,
+    UUPSUpgradeable
+{
     using Clones for address;
     using LendefiConstants for *;
     using EnumerableSet for EnumerableSet.AddressSet;
+    using SafeERC20 for IERC20;
 
     /**
      * @notice Information about a scheduled contract upgrade
@@ -52,16 +64,36 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @param exists Whether an upgrade request exists
      */
     struct UpgradeRequest {
-        address implementation;
-        uint64 scheduledTime;
-        bool exists;
+        address implementation; // 20 bytes
+        uint64 scheduledTime; // 8 bytes
+        bool exists; // 1 byte
+            // Note: This order matches interface expectations
+            // Could be optimized to 29 bytes in single slot, but breaks compatibility
     }
 
     // ========== STATE VARIABLES ==========
 
+    // ========== SLOT 0: uint256 variables ==========
     /// @notice Version of the factory contract
     uint256 public version;
 
+    // ========== SLOT 1: uint256 variables ==========
+    /// @notice Required governance token balance to create markets
+    uint256 public requiredGovBalance;
+
+    // ========== SLOT 2: uint256 variables ==========
+    /// @notice Fee in governance tokens required for market creation
+    uint256 public newMarketFee;
+
+    // ========== SLOT 3: uint256 variables ==========
+    /// @notice Maximum number of markets allowed per address
+    uint256 public maxMarketsPerAddress;
+
+    // ========== SLOT 4: uint256 variables ==========
+    /// @notice Total governance tokens collected from market creation
+    uint256 public totalGovTokensCollected;
+
+    // ========== SLOT 5: Implementation addresses (5 addresses = 5 slots) ==========
     /// @notice Implementation contract address for LendefiCore instances
     /// @dev Used as template for cloning new core contracts for each market
     address public coreImplementation;
@@ -82,6 +114,7 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
     /// @dev Template for creating PoR feeds for each market to track reserves
     address public porFeedImplementation;
 
+    // ========== SLOT 10: Protocol addresses (5 addresses = 5 slots) ==========
     /// @notice Address of the protocol governance token
     /// @dev Used for liquidator threshold requirements and rewards distribution
     address public govToken;
@@ -98,42 +131,41 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
     /// @dev Handles governance token rewards for liquidity providers
     address public ecosystem;
 
-    /// @notice Network-specific USDC address
-    address public networkUSDC;
+    /// @notice Network-specific base stablecoin address (USDC on Ethereum, USDT on BSC)
+    address public networkStable;
 
-    /// @notice Network-specific WETH address
-    address public networkWETH;
+    // ========== SLOT 15: Network addresses (2 addresses = 2 slots) ==========
+    /// @notice Network-specific wrapped native token address (WETH on Ethereum, WBNB on BSC)
+    address public networkWrappedNative;
 
-    /// @notice Uniswap pool address for USDC/WETH
-    address public usdcWethPool;
+    /// @notice Primary DEX pool address for base/wrapped native pair
+    address public primaryPool;
 
-    /// @notice Set of approved base assets that can be used for market creation
-    /// @dev Only assets in this allowlist can be used to create new markets
-    /// @dev Ensures only tested and verified assets are supported by the protocol
-    EnumerableSet.AddressSet private allowedBaseAssets;
-
-    /// @notice Nested mapping of market owner to base asset to market configuration
-    /// @dev First key: market owner address, Second key: base asset address, Value: Market struct
-    mapping(address => mapping(address => IPROTOCOL.Market)) internal markets;
-
-    /// @notice Mapping to track all base assets for each market owner
-    /// @dev Key: market owner address, Value: EnumerableSet of base asset addresses they've created markets for
-    mapping(address => EnumerableSet.AddressSet) internal ownerBaseAssets;
-
-    /// @notice Set of all market owners who have created markets
-    /// @dev Used for enumeration and iteration over all market owners with guaranteed uniqueness
-    EnumerableSet.AddressSet internal allMarketOwners;
-
-    /// @notice Array of all market configurations created by this factory
-    /// @dev Provides direct access to all market data across all owners
-    IPROTOCOL.Market[] internal allMarkets;
-
+    // ========== SLOT 17: Struct (takes full slot) ==========
     /// @dev Pending upgrade information
     UpgradeRequest public pendingUpgrade;
 
+    // ========== SLOT 18: Complex storage structures ==========
+    /// @notice Set of approved base assets that can be used for market creation
+    /// @dev Only assets in this allowlist can be used to create new markets
+    /// @dev Ensures only tested and verified assets are supported by the protocol
+    EnumerableSet.AddressSet internal allowedBaseAssets;
+
+    // ========== SLOT 19+: Mappings (separate slots each) ==========
+    /// @notice Mapping from marketId (keccak256(owner, baseAsset)) to market configuration
+    /// @dev Primary storage for markets using hash-based lookup for gas efficiency
+    mapping(bytes32 => IPROTOCOL.Market) internal markets;
+
+    /// @notice Mapping to track market IDs for each owner
+    /// @dev Key: market owner address, Value: array of market IDs
+    mapping(address => bytes32[]) internal ownerMarketIds;
+
+    /// @notice Track number of markets created by each address
+    mapping(address => uint256) internal marketsCreatedBy;
+
     /// @notice Storage gap for future upgrades
     /// @dev Storage gap reduced to account for new variables
-    uint256[13] private __gap;
+    uint256[7] private __gap;
 
     // ========== MODIFIERS ==========
 
@@ -161,9 +193,9 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @param _govToken Address of the protocol governance token
      * @param _multisig Address of the Proof of Reserves feed implementation
      * @param _ecosystem Address of the ecosystem contract for rewards
-     * @param _networkUSDC Network-specific USDC address for oracle validation
-     * @param _networkWETH Network-specific WETH address for oracle validation
-     * @param _usdcWethPool Network-specific USDC/WETH pool for price reference
+     * @param _networkStable Network-specific base stablecoin address for oracle validation
+     * @param _networkWrappedNative Network-specific wrapped native token address for oracle validation
+     * @param _primaryPool Network-specific base/wrapped native pool for price reference
      *
      * @custom:requirements
      *   - All address parameters must be non-zero
@@ -171,7 +203,7 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      *
      * @custom:state-changes
      *   - Initializes AccessControl and UUPS upgradeable functionality
-     *   - Grants DEFAULT_ADMIN_ROLE to the timelock address
+     *   - Grants DEFAULT_ADMIN_ROLE, UPGRADER_ROLE, and MANAGER_ROLE to the multisig address
      *   - Sets all protocol address state variables
      *
      * @custom:access-control Only callable during contract initialization
@@ -183,23 +215,26 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
         address _govToken,
         address _multisig,
         address _ecosystem,
-        address _networkUSDC,
-        address _networkWETH,
-        address _usdcWethPool
+        address _networkStable,
+        address _networkWrappedNative,
+        address _primaryPool
     ) external initializer {
         if (
             _timelock == address(0) || _govToken == address(0) || _multisig == address(0) || _ecosystem == address(0)
-                || _networkUSDC == address(0) || _networkWETH == address(0) || _usdcWethPool == address(0)
+                || _networkStable == address(0) || _networkWrappedNative == address(0) || _primaryPool == address(0)
         ) {
             revert ZeroAddress();
         }
 
         __AccessControl_init();
+        __ReentrancyGuard_init();
+        __Pausable_init();
         __UUPSUpgradeable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, _multisig);
         _grantRole(LendefiConstants.UPGRADER_ROLE, _multisig);
         _grantRole(LendefiConstants.MANAGER_ROLE, _multisig);
+        _grantRole(LendefiConstants.PAUSER_ROLE, _multisig);
 
         govToken = _govToken;
         timelock = _timelock;
@@ -207,11 +242,53 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
         ecosystem = _ecosystem;
 
         // Set network-specific addresses
-        networkUSDC = _networkUSDC;
-        networkWETH = _networkWETH;
-        usdcWethPool = _usdcWethPool;
+        networkStable = _networkStable;
+        networkWrappedNative = _networkWrappedNative;
+        primaryPool = _primaryPool;
+
+        // Initialize permissionless parameters with reasonable defaults
+        maxMarketsPerAddress = 21; // Default max 21 markets per address
+        requiredGovBalance = 1000 ether; // Default 1000 tokens required balance
+        newMarketFee = 100 ether; // Default 100 $LEND tokens required transfer
 
         version = 1;
+    }
+
+    // ========== PAUSE FUNCTIONS ==========
+
+    /**
+     * @notice Pauses market creation
+     * @dev Prevents new markets from being created while allowing existing operations to continue
+     *
+     * @custom:requirements
+     *   - Caller must have MANAGER_ROLE
+     *
+     * @custom:state-changes
+     *   - Sets contract to paused state
+     *
+     * @custom:emits Paused event with caller address
+     * @custom:access-control Restricted to MANAGER_ROLE
+     */
+    function pause() external onlyRole(LendefiConstants.MANAGER_ROLE) {
+        _pause();
+    }
+
+    /**
+     * @notice Unpauses market creation
+     * @dev Allows market creation to resume after being paused
+     *
+     * @custom:requirements
+     *   - Caller must have MANAGER_ROLE
+     *   - Contract must be currently paused
+     *
+     * @custom:state-changes
+     *   - Sets contract to unpaused state
+     *
+     * @custom:emits Unpaused event with caller address
+     * @custom:access-control Restricted to MANAGER_ROLE
+     */
+    function unpause() external onlyRole(LendefiConstants.MANAGER_ROLE) {
+        _unpause();
     }
 
     // ========== ADMIN FUNCTIONS ==========
@@ -271,7 +348,7 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @param baseAsset Address of the base asset to add to the allowlist
      *
      * @custom:requirements
-     *   - Caller must have DEFAULT_ADMIN_ROLE
+     *   - Caller must have MANAGER_ROLE
      *   - baseAsset must be a valid address (non-zero)
      *   - baseAsset must not already be in the allowlist
      *
@@ -283,13 +360,18 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @custom:error-cases
      *   - ZeroAddress: When baseAsset is the zero address
      */
-    function addAllowedBaseAsset(address baseAsset) external onlyRole(LendefiConstants.MANAGER_ROLE) {
+    function addAllowedBaseAsset(address baseAsset)
+        external
+        onlyRole(LendefiConstants.MANAGER_ROLE)
+        returns (bool added)
+    {
         if (baseAsset == address(0)) revert ZeroAddress();
 
-        bool added = allowedBaseAssets.add(baseAsset);
-        if (added) {
-            emit BaseAssetAdded(baseAsset, msg.sender);
-        }
+        // Validate ERC20 token properties before adding to allowlist
+        _validateTokenProperties(baseAsset);
+
+        added = allowedBaseAssets.add(baseAsset);
+        if (added) emit BaseAssetAdded(baseAsset, msg.sender);
     }
 
     /**
@@ -299,7 +381,7 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @param baseAsset Address of the base asset to remove from the allowlist
      *
      * @custom:requirements
-     *   - Caller must have DEFAULT_ADMIN_ROLE
+     *   - Caller must have MANAGER_ROLE
      *   - baseAsset must be a valid address (non-zero)
      *   - baseAsset must currently be in the allowlist
      *
@@ -311,13 +393,110 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @custom:error-cases
      *   - ZeroAddress: When baseAsset is the zero address
      */
-    function removeAllowedBaseAsset(address baseAsset) external onlyRole(LendefiConstants.MANAGER_ROLE) {
+    function removeAllowedBaseAsset(address baseAsset)
+        external
+        onlyRole(LendefiConstants.MANAGER_ROLE)
+        returns (bool removed)
+    {
         if (baseAsset == address(0)) revert ZeroAddress();
+        removed = allowedBaseAssets.remove(baseAsset);
+        if (removed) emit BaseAssetRemoved(baseAsset, msg.sender);
+    }
 
-        bool removed = allowedBaseAssets.remove(baseAsset);
-        if (removed) {
-            emit BaseAssetRemoved(baseAsset, msg.sender);
-        }
+    /**
+     * @notice Updates the maximum markets allowed per address
+     * @dev Sets the limit on how many markets a single address can create
+     * @param newMax The new maximum number of markets per address
+     *
+     * @custom:requirements
+     *   - Caller must have MANAGER_ROLE
+     *   - newMax must be greater than 0
+     *
+     * @custom:state-changes
+     *   - Updates maxMarketsPerAddress state variable
+     *
+     * @custom:emits MaxMarketsPerAddressUpdated event with old and new maximum
+     * @custom:access-control Restricted to MANAGER_ROLE
+     */
+    function setMaxMarketsPerAddress(uint256 newMax) external onlyRole(LendefiConstants.MANAGER_ROLE) {
+        if (newMax == 0) revert InvalidZeroValue();
+        uint256 oldMax = maxMarketsPerAddress;
+        maxMarketsPerAddress = newMax;
+        emit MaxMarketsPerAddressUpdated(oldMax, newMax, msg.sender);
+    }
+
+    /**
+     * @notice Updates the required governance token balance for market creation
+     * @dev Sets the minimum balance requirement for creating markets
+     * @param newBalance The new required balance amount
+     *
+     * @custom:requirements
+     *   - Caller must have MANAGER_ROLE
+     *   - newBalance must be greater than 0
+     *
+     * @custom:state-changes
+     *   - Updates requiredGovBalance state variable
+     *
+     * @custom:emits RequiredGovBalanceUpdated event with old and new balance
+     * @custom:access-control Restricted to MANAGER_ROLE
+     */
+    function setRequiredGovBalance(uint256 newBalance) external onlyRole(LendefiConstants.MANAGER_ROLE) {
+        if (newBalance == 0) revert InvalidZeroValue();
+        uint256 oldBalance = requiredGovBalance;
+        requiredGovBalance = newBalance;
+        emit RequiredGovBalanceUpdated(oldBalance, newBalance, msg.sender);
+    }
+
+    /**
+     * @notice Updates the governance token fee required for market creation
+     * @dev Sets the amount of tokens that must be transferred when creating markets
+     * @param newAmount The new required transfer amount
+     *
+     * @custom:requirements
+     *   - Caller must have MANAGER_ROLE
+     *   - newAmount must be greater than 0
+     *
+     * @custom:state-changes
+     *   - Updates newMarketFee state variable
+     *
+     * @custom:emits NewMarketFeeUpdated event with old and new amount
+     * @custom:access-control Restricted to MANAGER_ROLE
+     */
+    function setNewMarketFee(uint256 newAmount) external onlyRole(LendefiConstants.MANAGER_ROLE) {
+        if (newAmount == 0) revert InvalidZeroValue();
+        uint256 oldAmount = newMarketFee;
+        newMarketFee = newAmount;
+        emit NewMarketFeeUpdated(oldAmount, newAmount, msg.sender);
+    }
+
+    /**
+     * @notice Withdraws collected governance tokens to the multisig address
+     * @dev Transfers all collected governance tokens from market creation fees to the multisig wallet.
+     *      Uses checks-effects-interactions pattern for security.
+     *
+     * @custom:requirements
+     *   - Caller must have MANAGER_ROLE
+     *   - Contract must have governance token balance to withdraw
+     *
+     * @custom:state-changes
+     *   - Transfers all governance tokens from contract to multisig
+     *
+     * @custom:emits GovTokensWithdrawn event with multisig address and amount
+     * @custom:access-control Restricted to MANAGER_ROLE
+     * @custom:error-cases
+     *   - NoTokensToWithdraw: When contract has zero governance token balance
+     */
+    function withdrawGovTokens() external nonReentrant onlyRole(LendefiConstants.MANAGER_ROLE) {
+        IERC20 govTokenContract = IERC20(govToken);
+        uint256 balance = govTokenContract.balanceOf(address(this));
+        if (balance == 0) revert NoTokensToWithdraw();
+        address cashedMultisig = multisig;
+
+        // Effects: emit event before external interaction
+        emit GovTokensWithdrawn(cashedMultisig, balance);
+
+        // Interactions: external call last
+        govTokenContract.safeTransfer(cashedMultisig, balance);
     }
 
     // ========== MARKET MANAGEMENT ==========
@@ -334,15 +513,20 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      *      operates independently with its own liquidity pools and risk parameters.
      *      The caller (msg.sender) becomes the market owner.
      *
+     *      PERMISSIONLESS: Anyone can create markets by paying the required fee.
+     *
      * @param baseAsset The ERC20 token address that will serve as the base asset for lending
      * @param name The name for the ERC4626 yield token (e.g., "Lendefi USDC Yield Token")
      * @param symbol The symbol for the ERC4626 yield token (e.g., "lendUSDC")
      *
      * @custom:requirements
      *   - baseAsset must be a valid ERC20 token address (non-zero)
+     *   - baseAsset must be in the allowed base assets list
      *   - Market for this caller/baseAsset pair must not already exist
      *   - Implementation contracts must be set before calling this function
-     *   - Caller must have MARKET_OWNER_ROLE
+     *   - Caller must have >= requiredGovBalance governance tokens in balance
+     *   - Caller must approve factory to transfer newMarketFee governance tokens
+     *   - Caller must not exceed maxMarketsPerAddress limit
      *
      * @custom:state-changes
      *   - Creates new market entry in nested markets mapping
@@ -350,41 +534,45 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      *   - Adds caller to allMarketOwners array (if first market)
      *   - Adds market info to allMarkets array
      *   - Deploys multiple new contract instances
+     *   - Increments marketsCreatedBy[caller]
+     *   - Updates totalGovTokensCollected
+     *   - Transfers newMarketFee governance tokens from caller to factory
      *
-     * @custom:emits MarketCreated event with all deployed contract addresses
-     * @custom:access-control Restricted to MARKET_OWNER_ROLE
+     * @custom:emits
+     *   - MarketCreated event with all deployed contract addresses
+     *   - MarketCreatedDetailed event with comprehensive market info for indexing
+     * @custom:access-control PERMISSIONLESS with governance token requirement
      * @custom:error-cases
      *   - ZeroAddress: When baseAsset is the zero address
+     *   - BaseAssetNotAllowed: When baseAsset is not in allowlist
+     *   - InsufficientGovTokenBalance: When caller balance < requiredGovBalance governance tokens
+     *   - MaxMarketsReached: When caller has reached their market limit
      *   - MarketAlreadyExists: When market for this caller/asset pair already exists
      *   - CloneDeploymentFailed: When any contract clone deployment fails
      */
     function createMarket(address baseAsset, string memory name, string memory symbol)
         external
-        onlyRole(LendefiConstants.MARKET_OWNER_ROLE)
+        nonReentrant
+        whenNotPaused
         onlyAllowedBaseAsset(baseAsset)
     {
-        address marketOwner = msg.sender;
-        if (baseAsset == address(0)) revert ZeroAddress();
-        if (markets[marketOwner][baseAsset].core != address(0)) {
-            revert MarketAlreadyExists();
-        }
+        // Validate string parameters
+        _validateStringParameters(name, symbol);
 
-        // Deploy core and vault contracts
-        (address coreProxy, address vaultProxy, address assetsModule) = _deployContracts(baseAsset, name, symbol);
+        IERC20 govTokenContract = IERC20(govToken);
+        _validateMarketCreation(msg.sender, baseAsset, govTokenContract);
 
-        // Deploy and initialize PoR feed
-        address porFeedClone = _deployPoRFeed(baseAsset);
+        // Deploy and store market
+        _deployAndStoreMarket(msg.sender, baseAsset, name, symbol);
 
-        // Create and store market configuration
-        _storeMarket(marketOwner, baseAsset, coreProxy, vaultProxy, porFeedClone, assetsModule, name, symbol);
+        // Update state before external interactions (checks-effects-interactions pattern)
+        uint256 cashedNewMarketFee = newMarketFee;
 
-        // Initialize the core contract with market information
-        LendefiCore(payable(coreProxy)).initializeMarket(markets[marketOwner][baseAsset]);
+        marketsCreatedBy[msg.sender]++;
+        totalGovTokensCollected += cashedNewMarketFee;
 
-        // Note: Market owner MANAGER_ROLE must be granted separately by timelock
-        // since factory doesn't have DEFAULT_ADMIN_ROLE on the vault
-
-        emit MarketCreated(marketOwner, baseAsset, coreProxy, vaultProxy, name, symbol, porFeedClone);
+        // Transfer governance tokens from market creator
+        govTokenContract.safeTransferFrom(msg.sender, address(this), cashedNewMarketFee);
     }
 
     /**
@@ -452,11 +640,15 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
         if (marketOwner == address(0) || baseAsset == address(0)) {
             revert ZeroAddress();
         }
-        if (markets[marketOwner][baseAsset].core == address(0)) {
+
+        bytes32 marketId = keccak256(abi.encodePacked(marketOwner, baseAsset));
+        IPROTOCOL.Market memory market = markets[marketId];
+
+        if (market.core == address(0)) {
             revert MarketNotFound();
         }
 
-        return markets[marketOwner][baseAsset];
+        return market;
     }
 
     /**
@@ -470,7 +662,8 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @custom:access-control Available to any caller (view function)
      */
     function isMarketActive(address marketOwner, address baseAsset) external view returns (bool) {
-        return markets[marketOwner][baseAsset].active;
+        bytes32 marketId = keccak256(abi.encodePacked(marketOwner, baseAsset));
+        return markets[marketId].active;
     }
 
     /**
@@ -482,13 +675,13 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @custom:access-control Available to any caller (view function)
      */
     function getOwnerMarkets(address marketOwner) external view returns (IPROTOCOL.Market[] memory) {
-        address[] memory baseAssets = ownerBaseAssets[marketOwner].values();
-        uint256 len = baseAssets.length;
+        bytes32[] memory marketIds = ownerMarketIds[marketOwner];
+        uint256 len = marketIds.length;
         IPROTOCOL.Market[] memory ownerMarkets = new IPROTOCOL.Market[](len);
 
         unchecked {
             for (uint256 i; i < len; ++i) {
-                ownerMarkets[i] = markets[marketOwner][baseAssets[i]];
+                ownerMarkets[i] = markets[marketIds[i]];
             }
         }
 
@@ -504,98 +697,17 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
      * @custom:access-control Available to any caller (view function)
      */
     function getOwnerBaseAssets(address marketOwner) external view returns (address[] memory) {
-        return ownerBaseAssets[marketOwner].values();
-    }
+        bytes32[] memory marketIds = ownerMarketIds[marketOwner];
+        uint256 len = marketIds.length;
+        address[] memory baseAssets = new address[](len);
 
-    /**
-     * @notice Returns all active markets across all owners
-     * @dev Filters through all created markets and returns only those marked as active.
-     * @return Array containing Market structs of all active markets
-     *
-     * @custom:gas-considerations This function iterates through all owners and markets,
-     *                            which can be gas-intensive with many markets
-     * @custom:access-control Available to any caller (view function)
-     */
-    function getAllActiveMarkets() external view returns (IPROTOCOL.Market[] memory) {
-        // Use allMarkets array which already has all markets
-        uint256 totalMarkets = allMarkets.length;
-        uint256 activeCount;
-
-        // First pass: count active markets
         unchecked {
-            for (uint256 i; i < totalMarkets; ++i) {
-                if (allMarkets[i].active) {
-                    ++activeCount;
-                }
+            for (uint256 i; i < len; ++i) {
+                baseAssets[i] = markets[marketIds[i]].baseAsset;
             }
         }
 
-        // Allocate result array
-        IPROTOCOL.Market[] memory activeMarkets = new IPROTOCOL.Market[](activeCount);
-
-        // Second pass: populate active markets
-        if (activeCount > 0) {
-            uint256 index;
-            unchecked {
-                for (uint256 i; i < totalMarkets; ++i) {
-                    if (allMarkets[i].active) {
-                        activeMarkets[index++] = allMarkets[i];
-                        if (index == activeCount) break; // Early exit when all found
-                    }
-                }
-            }
-        }
-
-        return activeMarkets;
-    }
-
-    /**
-     * @notice Returns the total number of market owners
-     * @dev Returns the length of the allMarketOwners set
-     * @return Total number of unique market owners
-     *
-     * @custom:access-control Available to any caller (view function)
-     */
-    function getMarketOwnersCount() external view returns (uint256) {
-        return allMarketOwners.length();
-    }
-
-    /**
-     * @notice Returns a market owner address by index
-     * @dev Retrieves an owner address from the allMarketOwners set
-     * @param index The index of the owner to retrieve
-     * @return Address of the market owner at the specified index
-     *
-     * @custom:requirements
-     *   - index must be less than allMarketOwners.length()
-     *
-     * @custom:access-control Available to any caller (view function)
-     */
-    function getMarketOwnerByIndex(uint256 index) external view returns (address) {
-        if (index >= allMarketOwners.length()) revert InvalidIndex();
-        return allMarketOwners.at(index);
-    }
-
-    /**
-     * @notice Returns all market owners as an array
-     * @dev Retrieves all unique market owner addresses
-     * @return Array of all market owner addresses
-     *
-     * @custom:access-control Available to any caller (view function)
-     */
-    function getAllMarketOwners() external view returns (address[] memory) {
-        return allMarketOwners.values();
-    }
-
-    /**
-     * @notice Returns the total number of markets created across all owners
-     * @dev Returns the length of the allMarkets array
-     * @return Total number of markets created
-     *
-     * @custom:access-control Available to any caller (view function)
-     */
-    function getTotalMarketsCount() external view returns (uint256) {
-        return allMarkets.length;
+        return baseAssets;
     }
 
     /**
@@ -651,6 +763,9 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
         internal
         returns (address coreProxy, address vaultProxy, address assetsModule)
     {
+        // Cache storage variables that are used multiple times to avoid multiple SLOAD operations
+        address cachedTimelock = timelock; // Used 4 times
+
         // Clone assets module for this market
         assetsModule = assetsModuleImplementation.clone();
         if (assetsModule == address(0) || assetsModule.code.length == 0) revert CloneDeploymentFailed();
@@ -660,22 +775,22 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
 
         // Initialize core contract through proxy
         bytes memory initData = abi.encodeWithSelector(
-            LendefiCore.initialize.selector, timelock, msg.sender, govToken, positionVaultImplementation
+            LendefiCore.initialize.selector, cachedTimelock, msg.sender, govToken, positionVaultImplementation
         );
-        coreProxy = address(new TransparentUpgradeableProxy(core, timelock, initData));
+        coreProxy = address(new TransparentUpgradeableProxy(core, cachedTimelock, initData));
 
         // Initialize assets module contract through proxy
         bytes memory assetsInitData = abi.encodeWithSelector(
             LendefiAssets.initialize.selector,
-            timelock,
+            cachedTimelock,
             msg.sender,
             porFeedImplementation,
             coreProxy,
-            networkUSDC,
-            networkWETH,
-            usdcWethPool
+            networkStable,
+            networkWrappedNative,
+            primaryPool
         );
-        assetsModule = address(new TransparentUpgradeableProxy(assetsModule, timelock, assetsInitData));
+        assetsModule = address(new TransparentUpgradeableProxy(assetsModule, cachedTimelock, assetsInitData));
 
         // Create vault contract using minimal proxy pattern
         address baseVault = vaultImplementation.clone();
@@ -683,9 +798,35 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
 
         // Initialize vault contract through proxy
         bytes memory vaultData = abi.encodeCall(
-            LendefiMarketVault.initialize, (timelock, coreProxy, baseAsset, ecosystem, assetsModule, name, symbol)
+            LendefiMarketVault.initialize, (cachedTimelock, coreProxy, baseAsset, ecosystem, assetsModule, name, symbol)
         );
-        vaultProxy = address(new TransparentUpgradeableProxy(baseVault, timelock, vaultData));
+        vaultProxy = address(new TransparentUpgradeableProxy(baseVault, cachedTimelock, vaultData));
+    }
+
+    /**
+     * @dev Internal function to deploy and store market
+     * @param marketOwner Address of the market creator
+     * @param baseAsset Address of the base asset
+     * @param name Name of the market
+     * @param symbol Symbol of the market
+     */
+    function _deployAndStoreMarket(address marketOwner, address baseAsset, string memory name, string memory symbol)
+        internal
+    {
+        // Deploy core and vault contracts
+        (address coreProxy, address vaultProxy, address assetsModule) = _deployContracts(baseAsset, name, symbol);
+
+        // Deploy and initialize PoR feed
+        address porFeedClone = _deployPoRFeed(baseAsset);
+
+        // Create and store market configuration
+        IPROTOCOL.Market memory marketInfo =
+            _storeMarket(marketOwner, baseAsset, coreProxy, vaultProxy, porFeedClone, assetsModule, name, symbol);
+
+        // Initialize the core contract with market information
+        LendefiCore(payable(coreProxy)).initializeMarket(marketInfo);
+
+        emit MarketCreated(marketOwner, baseAsset, coreProxy, vaultProxy, name, symbol, porFeedClone);
     }
 
     /**
@@ -699,7 +840,9 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
             revert CloneDeploymentFailed();
         }
 
-        IPoRFeed(porFeedClone).initialize(baseAsset, timelock, timelock);
+        // Cache timelock since it's used twice in the initialize call
+        address cachedTimelock = timelock;
+        IPoRFeed(porFeedClone).initialize(baseAsset, cachedTimelock, cachedTimelock);
     }
 
     /**
@@ -722,9 +865,9 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
         address assetsModule,
         string memory name,
         string memory symbol
-    ) internal {
+    ) internal returns (IPROTOCOL.Market memory marketInfo) {
         // Create market configuration struct
-        IPROTOCOL.Market memory marketInfo = IPROTOCOL.Market({
+        marketInfo = IPROTOCOL.Market({
             core: coreProxy,
             baseVault: vaultProxy,
             baseAsset: baseAsset,
@@ -737,18 +880,28 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
             active: true
         });
 
-        // Store market information in nested mapping
-        markets[marketOwner][baseAsset] = marketInfo;
+        // Compute market ID
+        bytes32 marketId = keccak256(abi.encodePacked(marketOwner, baseAsset));
 
-        // Track base assets for this owner
-        // This is guaranteed to succeed since we already verified the market doesn't exist
-        ownerBaseAssets[marketOwner].add(baseAsset);
+        // Store market using hash-based key
+        markets[marketId] = marketInfo;
 
-        // Track unique market owners (returns false if already exists, which is fine)
-        allMarketOwners.add(marketOwner);
+        // Track market IDs for this owner
+        ownerMarketIds[marketOwner].push(marketId);
 
-        // Add to global markets array
-        allMarkets.push(marketInfo);
+        // Emit comprehensive event for off-chain indexing
+        emit MarketCreatedDetailed(
+            marketOwner,
+            baseAsset,
+            coreProxy,
+            vaultProxy,
+            assetsModule,
+            porFeedClone,
+            name,
+            symbol,
+            uint8(marketInfo.decimals),
+            block.timestamp
+        );
     }
 
     // ========== UUPS UPGRADE AUTHORIZATION ==========
@@ -777,5 +930,62 @@ contract LendefiMarketFactoryV2 is ILendefiMarketFactory, Initializable, AccessC
 
         ++version;
         emit Upgrade(msg.sender, newImplementation);
+    }
+
+    /**
+     * @dev Internal function to validate ERC20 token properties
+     * @param baseAsset Address of the token to validate
+     */
+    function _validateTokenProperties(address baseAsset) internal view {
+        try IERC20Metadata(baseAsset).decimals() returns (uint8 decimals) {
+            if (decimals > 18) {
+                revert InvalidTokenProperties();
+            }
+        } catch {
+            revert InvalidTokenProperties();
+        }
+    }
+
+    /**
+     * @dev Internal function to validate market creation requirements
+     * @param marketOwner Address of the market creator
+     * @param baseAsset Address of the base asset
+     */
+    function _validateMarketCreation(address marketOwner, address baseAsset, IERC20 govTokenContract) internal view {
+        if (baseAsset == address(0)) revert ZeroAddress();
+
+        // Cache storage variables to save gas
+        uint256 cachedRequiredGovBalance = requiredGovBalance;
+        uint256 cachedMaxMarketsPerAddress = maxMarketsPerAddress;
+
+        // Check governance token balance requirement
+        if (govTokenContract.balanceOf(marketOwner) < cachedRequiredGovBalance) {
+            revert InsufficientGovTokenBalance();
+        }
+
+        // Check rate limiting
+        if (marketsCreatedBy[marketOwner] >= cachedMaxMarketsPerAddress) {
+            revert MaxMarketsReached();
+        }
+
+        // Check if market already exists
+        bytes32 marketId = keccak256(abi.encodePacked(marketOwner, baseAsset));
+        if (markets[marketId].core != address(0)) {
+            revert MarketAlreadyExists();
+        }
+    }
+
+    /**
+     * @dev Internal function to validate string parameters
+     * @param name The name parameter to validate
+     * @param symbol The symbol parameter to validate
+     */
+    function _validateStringParameters(string memory name, string memory symbol) internal pure {
+        if (bytes(name).length == 0 || bytes(name).length > 50) {
+            revert InvalidStringParameter();
+        }
+        if (bytes(symbol).length == 0 || bytes(symbol).length > 10) {
+            revert InvalidStringParameter();
+        }
     }
 }

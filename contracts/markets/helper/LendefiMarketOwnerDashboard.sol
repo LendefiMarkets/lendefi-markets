@@ -252,8 +252,11 @@ contract LendefiMarketOwnerDashboard is ILendefiMarketOwnerDashboard {
 
     /**
      * @dev Internal function to create OwnerMarketOverview for a given market
-     * @param market The market configuration to create overview for
-     * @return OwnerMarketOverview struct containing comprehensive market data for owners
+     */
+    /**
+     * @dev Gets market overview data for an owner
+     * @param market The market to get overview for
+     * @return OwnerMarketOverview struct containing market data
      */
     function _getOwnerMarketOverview(IPROTOCOL.Market memory market)
         internal
@@ -310,9 +313,12 @@ contract LendefiMarketOwnerDashboard is ILendefiMarketOwnerDashboard {
 
     /**
      * @dev Calculates portfolio health score (0-1000)
-     * @param totalTVL Total value locked across owner's portfolio
-     * @param totalDebt Total debt across owner's portfolio
-     * @return Portfolio health score where 1000 = perfect health, 0 = critical
+     */
+    /**
+     * @dev Calculates portfolio health score
+     * @param totalTVL Total value locked in portfolio
+     * @param totalDebt Total debt in portfolio
+     * @return Health score (0-1000, higher is better)
      */
     function _calculatePortfolioHealth(uint256 totalTVL, uint256 totalDebt) internal pure returns (uint256) {
         if (totalTVL == 0) return 1000; // Perfect health if no TVL
@@ -325,10 +331,13 @@ contract LendefiMarketOwnerDashboard is ILendefiMarketOwnerDashboard {
 
     /**
      * @dev Calculates performance score based on TVL, debt, and fees (0-1000)
-     * @param tvl Total value locked in the portfolio
-     * @param debt Total debt in the portfolio
-     * @param fees Total fees earned by the portfolio
-     * @return Performance score where higher values indicate better performance
+     */
+    /**
+     * @dev Calculates performance score based on metrics
+     * @param tvl Total value locked
+     * @param debt Total debt
+     * @param fees Total fees earned
+     * @return Performance score (0-1000, higher is better)
      */
     function _calculatePerformanceScore(uint256 tvl, uint256 debt, uint256 fees) internal pure returns (uint256) {
         if (tvl == 0) return 0;
@@ -346,9 +355,12 @@ contract LendefiMarketOwnerDashboard is ILendefiMarketOwnerDashboard {
 
     /**
      * @dev Calculates market performance score (0-1000)
+     */
+    /**
+     * @dev Calculates market performance score
      * @param totalAssets Total assets in the market
-     * @param totalBorrowed Total borrowed amount in the market
-     * @return Market performance score based on optimal utilization
+     * @param totalBorrowed Total amount borrowed
+     * @return Performance score (0-1000, higher is better)
      */
     function _calculateMarketPerformanceScore(uint256 totalAssets, uint256 totalBorrowed)
         internal
@@ -372,17 +384,17 @@ contract LendefiMarketOwnerDashboard is ILendefiMarketOwnerDashboard {
 
     /**
      * @dev Calculates market risk score (0-1000, higher = riskier)
-     * @param utilization Current market utilization rate
-     * @param avgHealthFactor Average health factor of positions (currently unused)
-     * @return Risk score where higher values indicate greater risk
+     */
+    /**
+     * @dev Calculates market risk score
+     * @param utilization Market utilization rate
+     * @param avgHealthFactor Average health factor (unused in current implementation)
+     * @return Risk score (0-1000, lower is safer)
      */
     function _calculateMarketRiskScore(uint256 utilization, uint256 avgHealthFactor) internal pure returns (uint256) {
         avgHealthFactor;
-        // Risk increases with higher utilization
-        uint256 utilizationRisk = utilization > 1000 ? 1000 : utilization;
 
-        // TODO: Factor in average health factor when available
-        // For now, base risk primarily on utilization
+        uint256 utilizationRisk = utilization > 1000 ? 1000 : utilization;
         return utilizationRisk;
     }
 }

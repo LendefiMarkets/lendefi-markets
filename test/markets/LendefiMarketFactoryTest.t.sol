@@ -33,9 +33,7 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         // Deploy base contracts and market
         deployMarketsWithUSDC();
 
-        // Setup TGE
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
+        // TGE is already initialized in deployMarketsWithUSDC(), no need to call it again
 
         // Deploy additional tokens for multi-market tests
         daiToken = new TokenMock("DAI Stablecoin", "DAI");
@@ -60,6 +58,16 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         marketFactoryInstance.addAllowedBaseAsset(address(daiToken));
         marketFactoryInstance.addAllowedBaseAsset(address(usdtToken));
         vm.stopPrank();
+    }
+
+    function setupGovTokensForUser(address user) internal {
+        // Transfer governance tokens from guardian to user (guardian received DEPLOYER_SHARE during TGE)
+        vm.prank(guardian);
+        tokenInstance.transfer(user, 10000 ether); // Transfer 10,000 tokens (more than the 1000 required)
+
+        // User approves factory to spend governance tokens (enough for multiple markets)
+        vm.prank(user);
+        tokenInstance.approve(address(marketFactoryInstance), 1000 ether); // Approve enough for 10 markets (100 each)
     }
 
     // ============ Factory Initialization Tests ============
@@ -162,6 +170,9 @@ contract LendefiMarketFactoryTest is BasicDeploy {
     function test_CreateMarket_DAI() public {
         addAssetToAllowlist(address(daiToken));
 
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        setupGovTokensForUser(charlie);
+
         vm.prank(charlie);
         marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
 
@@ -186,6 +197,9 @@ contract LendefiMarketFactoryTest is BasicDeploy {
     function test_CreateMarket_USDT_6Decimals() public {
         addAssetToAllowlist(address(usdtToken));
 
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        setupGovTokensForUser(charlie);
+
         vm.prank(charlie);
         marketFactoryInstance.createMarket(address(usdtToken), "Lendefi USDT Market", "lfUSDT");
 
@@ -198,25 +212,28 @@ contract LendefiMarketFactoryTest is BasicDeploy {
 
     function test_Revert_CreateMarket_Duplicate() public {
         // Try to create another USDC market (charlie already has a USDC market from BasicDeploy)
+        // Setup governance tokens for charlie first
+        setupGovTokensForUser(charlie);
+
         vm.prank(charlie);
         vm.expectRevert(ILendefiMarketFactory.MarketAlreadyExists.selector);
         marketFactoryInstance.createMarket(address(usdcInstance), "Duplicate Market", "DUP");
     }
 
     function test_Revert_CreateMarket_ZeroAsset() public {
+        // Setup governance tokens for charlie first
+        setupGovTokensForUser(charlie);
+
         vm.prank(charlie);
         vm.expectRevert(ILendefiMarketFactory.BaseAssetNotAllowed.selector);
         marketFactoryInstance.createMarket(address(0), "Bad Market", "BAD");
     }
 
-    function test_Revert_CreateMarket_Unauthorized() public {
+    function test_Revert_CreateMarket_InsufficientGovTokens() public {
+        addAssetToAllowlist(address(daiToken));
         vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, alice, LendefiConstants.MARKET_OWNER_ROLE
-            )
-        );
-        marketFactoryInstance.createMarket(address(daiToken), "Unauthorized Market", "UNAUTH");
+        vm.expectRevert(ILendefiMarketFactory.InsufficientGovTokenBalance.selector);
+        marketFactoryInstance.createMarket(address(daiToken), "Insufficient Tokens Market", "INSUF");
     }
 
     // ============ Market Query Tests ============
@@ -246,32 +263,13 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         assertFalse(marketFactoryInstance.isMarketActive(charlie, address(daiToken)));
     }
 
-    function test_GetAllActiveMarkets() public {
-        addMultipleAssetsToAllowlist();
-
-        // Initially only USDC market
-        IPROTOCOL.Market[] memory activeMarkets = marketFactoryInstance.getAllActiveMarkets();
-        assertEq(activeMarkets.length, 1);
-        assertEq(activeMarkets[0].baseAsset, address(usdcInstance));
-
-        // Create DAI market
-        vm.prank(charlie);
-        marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
-
-        // Create USDT market
-        vm.prank(charlie);
-        marketFactoryInstance.createMarket(address(usdtToken), "Lendefi USDT Market", "lfUSDT");
-
-        // Should have 3 active markets
-        activeMarkets = marketFactoryInstance.getAllActiveMarkets();
-        assertEq(activeMarkets.length, 3);
-        assertEq(activeMarkets[0].baseAsset, address(usdcInstance));
-        assertEq(activeMarkets[1].baseAsset, address(daiToken));
-        assertEq(activeMarkets[2].baseAsset, address(usdtToken));
-    }
+    // Note: getAllActiveMarkets() function was removed in favor of owner-specific queries
 
     function test_EachMarketHasOwnAssetsModule() public {
         addMultipleAssetsToAllowlist();
+
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        setupGovTokensForUser(charlie);
 
         // Create DAI market as Charlie
         vm.prank(charlie);
@@ -511,6 +509,9 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         assertFalse(marketFactoryInstance.isMarketActive(charlie, address(daiToken)));
         assertFalse(marketFactoryInstance.isMarketActive(alice, address(usdcInstance)));
 
+        // Setup governance tokens for charlie
+        setupGovTokensForUser(charlie);
+
         // Create DAI market for charlie
         vm.prank(charlie);
         marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
@@ -535,6 +536,9 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         IPROTOCOL.Market[] memory aliceMarkets = marketFactoryInstance.getOwnerMarkets(alice);
         assertEq(aliceMarkets.length, 0);
 
+        // Setup governance tokens for charlie
+        setupGovTokensForUser(charlie);
+
         // Create additional markets for charlie
         vm.startPrank(charlie);
         marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
@@ -550,11 +554,8 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         assertEq(charlieMarkets[1].baseAsset, address(daiToken));
         assertEq(charlieMarkets[2].baseAsset, address(usdtToken));
 
-        // Grant MARKET_OWNER_ROLE to alice and create a market for her
-        // Use startPrank/stopPrank instead of just prank to ensure it works correctly
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, alice);
-        vm.stopPrank();
+        // Setup governance tokens for alice to create a market
+        setupGovTokensForUser(alice);
 
         vm.prank(alice);
         marketFactoryInstance.createMarket(address(daiToken), "Alice DAI Market", "aDAI");
@@ -581,6 +582,9 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         address[] memory aliceAssets = marketFactoryInstance.getOwnerBaseAssets(alice);
         assertEq(aliceAssets.length, 0);
 
+        // Setup governance tokens for charlie
+        setupGovTokensForUser(charlie);
+
         // Create additional markets for charlie
         vm.startPrank(charlie);
         marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
@@ -598,90 +602,37 @@ contract LendefiMarketFactoryTest is BasicDeploy {
     function test_GetMarketOwnersCount() public {
         addMultipleAssetsToAllowlist();
         // Initially should have 1 owner (charlie from BasicDeploy)
-        assertEq(marketFactoryInstance.getMarketOwnersCount(), 1);
+        // Note: getMarketOwnersCount() function was removed
 
-        // Grant MARKET_OWNER_ROLE to alice and create a market
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, alice);
-        vm.stopPrank();
+        // Setup governance tokens for alice to create a market
+        setupGovTokensForUser(alice);
 
         vm.prank(alice);
         marketFactoryInstance.createMarket(address(daiToken), "Alice DAI Market", "aDAI");
 
         // Should now have 2 owners
-        assertEq(marketFactoryInstance.getMarketOwnersCount(), 2);
+        // Note: getMarketOwnersCount() function was removed
 
-        // Grant MARKET_OWNER_ROLE to bob and create a market
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, bob);
-        vm.stopPrank();
+        // Setup governance tokens for bob to create a market
+        setupGovTokensForUser(bob);
 
         vm.prank(bob);
         marketFactoryInstance.createMarket(address(usdtToken), "Bob USDT Market", "bUSDT");
 
         // Should now have 3 owners
-        assertEq(marketFactoryInstance.getMarketOwnersCount(), 3);
+        // Note: getMarketOwnersCount() function was removed
     }
 
-    function test_GetMarketOwnerByIndex() public {
-        addMultipleAssetsToAllowlist();
-        // Initially should have charlie as the only owner
-        assertEq(marketFactoryInstance.getMarketOwnerByIndex(0), charlie);
+    // Note: getMarketOwnerByIndex() function was removed
 
-        // Grant MARKET_OWNER_ROLE to alice and create a market
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, alice);
-        vm.stopPrank();
-
-        vm.prank(alice);
-        marketFactoryInstance.createMarket(address(daiToken), "Alice DAI Market", "aDAI");
-
-        // Should now have charlie at index 0 and alice at index 1
-        assertEq(marketFactoryInstance.getMarketOwnerByIndex(0), charlie);
-        assertEq(marketFactoryInstance.getMarketOwnerByIndex(1), alice);
-    }
-
-    function test_Revert_GetMarketOwnerByIndex_OutOfBounds() public {
-        // Should revert when accessing index >= length
-        vm.expectRevert(abi.encodeWithSignature("InvalidIndex()"));
-        marketFactoryInstance.getMarketOwnerByIndex(1);
-
-        vm.expectRevert(abi.encodeWithSignature("InvalidIndex()"));
-        marketFactoryInstance.getMarketOwnerByIndex(999);
-    }
-
-    function test_GetTotalMarketsCount() public {
-        addMultipleAssetsToAllowlist();
-        // Initially should have 1 market (charlie's USDC from BasicDeploy)
-        assertEq(marketFactoryInstance.getTotalMarketsCount(), 1);
-
-        // Create additional markets for charlie
-        vm.startPrank(charlie);
-        marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
-        marketFactoryInstance.createMarket(address(usdtToken), "Lendefi USDT Market", "lfUSDT");
-        vm.stopPrank();
-
-        // Should now have 3 markets
-        assertEq(marketFactoryInstance.getTotalMarketsCount(), 3);
-
-        // Grant MARKET_OWNER_ROLE to alice and create a market
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, alice);
-        vm.stopPrank();
-
-        vm.prank(alice);
-        marketFactoryInstance.createMarket(address(daiToken), "Alice DAI Market", "aDAI");
-
-        // Should now have 4 markets total
-        assertEq(marketFactoryInstance.getTotalMarketsCount(), 4);
-    }
+    // Note: getTotalMarketsCount() function was removed
 
     function test_MultiTenant_MarketIsolation() public {
         addMultipleAssetsToAllowlist();
-        // Grant MARKET_OWNER_ROLE to alice
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, alice);
-        vm.stopPrank();
+        // Setup governance tokens for alice
+        setupGovTokensForUser(alice);
+        // Setup governance tokens for charlie too
+        setupGovTokensForUser(charlie);
 
         // Both charlie and alice create DAI markets
         vm.prank(charlie);
@@ -715,64 +666,7 @@ contract LendefiMarketFactoryTest is BasicDeploy {
         assertEq(aliceMarkets.length, 1); // DAI only
     }
 
-    function test_GetAllActiveMarkets_MultiTenant() public {
-        addMultipleAssetsToAllowlist();
-        // Initial state: 1 active market (charlie's USDC)
-        IPROTOCOL.Market[] memory activeMarkets = marketFactoryInstance.getAllActiveMarkets();
-        assertEq(activeMarkets.length, 1);
-
-        // Grant MARKET_OWNER_ROLE to alice
-        vm.startPrank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, alice);
-        vm.stopPrank();
-
-        // Create markets for multiple owners
-        vm.prank(charlie);
-        marketFactoryInstance.createMarket(address(daiToken), "Charlie DAI Market", "cDAI");
-
-        vm.prank(alice);
-        marketFactoryInstance.createMarket(address(daiToken), "Alice DAI Market", "aDAI");
-
-        vm.prank(alice);
-        marketFactoryInstance.createMarket(address(usdtToken), "Alice USDT Market", "aUSDT");
-
-        // Should now have 4 active markets total
-        activeMarkets = marketFactoryInstance.getAllActiveMarkets();
-        assertEq(activeMarkets.length, 4);
-
-        // Verify all markets are included
-        bool foundCharlieUSDC = false;
-        bool foundCharlieDAI = false;
-        bool foundAliceDAI = false;
-        bool foundAliceUSDT = false;
-
-        for (uint256 i = 0; i < activeMarkets.length; i++) {
-            IPROTOCOL.Market memory market = activeMarkets[i];
-            if (
-                market.baseAsset == address(usdcInstance)
-                    && keccak256(bytes(market.symbol)) == keccak256(bytes("LYTUSDC"))
-            ) {
-                foundCharlieUSDC = true;
-            } else if (
-                market.baseAsset == address(daiToken) && keccak256(bytes(market.symbol)) == keccak256(bytes("cDAI"))
-            ) {
-                foundCharlieDAI = true;
-            } else if (
-                market.baseAsset == address(daiToken) && keccak256(bytes(market.symbol)) == keccak256(bytes("aDAI"))
-            ) {
-                foundAliceDAI = true;
-            } else if (
-                market.baseAsset == address(usdtToken) && keccak256(bytes(market.symbol)) == keccak256(bytes("aUSDT"))
-            ) {
-                foundAliceUSDT = true;
-            }
-        }
-
-        assertTrue(foundCharlieUSDC, "Charlie's USDC market should be found");
-        assertTrue(foundCharlieDAI, "Charlie's DAI market should be found");
-        assertTrue(foundAliceDAI, "Alice's DAI market should be found");
-        assertTrue(foundAliceUSDT, "Alice's USDT market should be found");
-    }
+    // Note: getAllActiveMarkets() function was removed in favor of owner-specific queries
 
     // ============ Additional Coverage Tests ============
 }

@@ -63,6 +63,13 @@ contract AllowlistTest is BasicDeploy {
         vm.prank(gnosisSafe);
         marketFactoryInstance.addAllowedBaseAsset(address(testToken));
 
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        // Charlie should already have tokens from BasicDeploy, but may have used his approval
+        // Reset charlie's token balance and give fresh approval
+        deal(address(tokenInstance), charlie, 10000 ether);
+        vm.prank(charlie);
+        tokenInstance.approve(address(marketFactoryInstance), type(uint256).max); // Give unlimited approval
+
         // Now market creation should succeed
         vm.prank(charlie);
         marketFactoryInstance.createMarket(address(testToken), "Test Market", "TEST");

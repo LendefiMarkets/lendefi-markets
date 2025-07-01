@@ -16,13 +16,13 @@ contract ProxyDeployer {
     /**
      * @notice Deploys the LendefiMarketVault implementation using ERC1967Proxy pattern
      * @dev Follows the same pattern as deployLendefiCoreUpgrade but for market vault
-     * @param baseAsset Address of the base asset for the vault
+     * @param baseAsset Address of the base asset for the market
      * @param timelockInstance Address of the timelock contract
      * @param tokenInstance Address of the governance token
      * @param ecosystemInstance Address of the ecosystem contract
      * @param assetsInstance Address of the assets module
-     * @param name Name of the vault token
-     * @param symbol Symbol of the vault token
+     * @param name Name for the vault token
+     * @param symbol Symbol for the vault token
      * @return vaultInstance Address of the deployed vault proxy
      */
     function deployMarketVaultProxy(
@@ -57,6 +57,9 @@ contract ProxyDeployer {
     /**
      * @notice Deploys the LendefiCore implementation using ERC1967Proxy pattern
      * @dev Follows the same pattern as deployTimelockUpgrade
+     */
+    /**
+     * @dev Deploys a LendefiCore proxy with initialization
      * @param timelockInstance Address of the timelock contract
      * @param tokenInstance Address of the governance token
      * @param assetsInstance Address of the assets module

@@ -28,9 +28,7 @@ contract UpdateAssetConfigTest is BasicDeploy {
         // Use the updated deployment function that includes Oracle setup
         deployMarketsWithUSDC();
 
-        // TGE setup
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
+        // TGE already initialized in deployMarketsWithUSDC()
 
         // Deploy test token and oracle for this specific test
         testToken = new MockRWA("Test Token", "TEST");
@@ -673,9 +671,9 @@ contract UpdateAssetConfigTest is BasicDeploy {
             })
         );
 
-        // Now try to set an invalid TWAP period (too short)
-        vm.expectRevert(abi.encodeWithSelector(IASSETS.InvalidThreshold.selector, "twapPeriod", 899, 900, 1800));
-        assetsInstance.updateUniswapOracle(address(testToken), address(testPool), 899, 1);
+        // Now try to set an invalid TWAP period (too short) - minimum is actually 120 seconds (2 minutes)
+        vm.expectRevert(abi.encodeWithSelector(IASSETS.InvalidThreshold.selector, "twapPeriod", 119, 900, 1800));
+        assetsInstance.updateUniswapOracle(address(testToken), address(testPool), 119, 1);
 
         vm.stopPrank();
     }

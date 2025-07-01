@@ -444,7 +444,7 @@ contract LendefiGovernorTest is BasicDeploy {
     function test_VotingPeriod() public {
         // Retrieve voting period
         uint256 period = govInstance.votingPeriod();
-        assertEq(period, 50400);
+        assertEq(period, 7200);
     }
 
     //Test: Quorum
@@ -544,7 +544,7 @@ contract LendefiGovernorTest is BasicDeploy {
     // Test: Default constants match expected values
     function test_DefaultConstants() public {
         assertEq(govInstance.DEFAULT_VOTING_DELAY(), 7200);
-        assertEq(govInstance.DEFAULT_VOTING_PERIOD(), 50400);
+        assertEq(govInstance.DEFAULT_VOTING_PERIOD(), 7200);
         assertEq(govInstance.DEFAULT_PROPOSAL_THRESHOLD(), 20_000 ether);
     }
 

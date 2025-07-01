@@ -34,8 +34,6 @@ contract LendefiViewTest is BasicDeploy {
         // Set dynamic amounts
         INITIAL_DEPOSIT = getUSDCAmount(100_000);
         BORROW_AMOUNT = getUSDCAmount(15_000);
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
         // Deploy WETH and its oracle
         wethInstance = new WETH9();

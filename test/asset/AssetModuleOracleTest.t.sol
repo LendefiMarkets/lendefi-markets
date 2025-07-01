@@ -172,7 +172,7 @@ contract AssetModuleOracleTest is BasicDeploy {
 
         // Update freshness threshold
         vm.expectEmit(true, true, true, true);
-        emit FreshnessThresholdUpdated(28800, 7200); // Default is 8 hours (28800 seconds)
+        emit FreshnessThresholdUpdated(28800, 7200); // Default is 8 hours (28800 seconds) for Ethereum mainnet
 
         assetsInstance.updateMainOracleConfig(
             7200, // 2 hours
@@ -360,7 +360,7 @@ contract AssetModuleOracleTest is BasicDeploy {
         vm.startPrank(address(timelockInstance));
 
         // Configure oracle with old timestamp
-        mockOracle1.setTimestamp(block.timestamp - 9 hours); // Freshness threshold is 8 hours
+        mockOracle1.setTimestamp(block.timestamp - 25 hours); // Freshness threshold is 24 hours for Base L2
         //assetsInstance.addOracle(address(wethInstance), address(mockOracle1), 8, IASSETS.OracleType.CHAINLINK);
 
         // Try to get price (should revert)

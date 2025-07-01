@@ -16,10 +16,6 @@ contract LendefiMarketVaultFuzzTest is BasicDeploy {
         decimals = usdcInstance.decimals();
         initialLiquidity = getUSDCAmount(1_000_000); // 1M USDC
 
-        // Setup TGE
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
-
         // Setup initial liquidity for vault tests
         deal(address(usdcInstance), alice, initialLiquidity);
         vm.startPrank(alice);
@@ -303,7 +299,7 @@ contract LendefiMarketVaultFuzzTest is BasicDeploy {
         // Multiple deposits
         for (uint256 i = 0; i < numDepositors; i++) {
             depositors[i] = makeAddr(string.concat("depositor", vm.toString(i)));
-            deposits[i] = baseAmount * (i + 1) / numDepositors;
+            deposits[i] = (baseAmount * (i + 1)) / numDepositors;
 
             deal(address(usdcInstance), depositors[i], deposits[i]);
 
@@ -338,7 +334,7 @@ contract LendefiMarketVaultFuzzTest is BasicDeploy {
 
         // Verify state consistency
         assertEq(marketVaultInstance.totalBorrow(), totalBorrowed);
-        assertLe(marketVaultInstance.utilization(), (10 ** decimals) * 5 / 4); // <= 80%
+        assertLe(marketVaultInstance.utilization(), ((10 ** decimals) * 5) / 4); // <= 80%
 
         // Everyone can still withdraw remaining funds
         for (uint256 i = 0; i < numDepositors; i++) {

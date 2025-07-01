@@ -28,13 +28,17 @@ contract MarketFactoryTest is BasicDeploy {
         marketFactoryInstance.addAllowedBaseAsset(address(baseAsset2));
         vm.stopPrank();
 
-        // Setup TGE for proper functionality
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
+        // TGE is already initialized in deployMarketsWithUSDC(), no need to call it again
     }
 
     function testCreateMarket() public {
-        // Create market with first test asset (charlie has MARKET_OWNER_ROLE from BasicDeploy)
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        vm.prank(guardian);
+        tokenInstance.transfer(charlie, 10000 ether); // Transfer 10,000 tokens
+        vm.prank(charlie);
+        tokenInstance.approve(address(marketFactoryInstance), 100 ether); // Approve the 100 tokens that will be transferred
+
+        // Create market with first test asset
         vm.prank(charlie);
         marketFactoryInstance.createMarket(address(baseAsset1), "Test Market 1", "TM1");
 
@@ -49,19 +53,8 @@ contract MarketFactoryTest is BasicDeploy {
         assertTrue(createdMarket.core != address(0));
         assertTrue(createdMarket.baseVault != address(0));
 
-        // Check market exists in arrays
-        IPROTOCOL.Market[] memory activeMarkets = marketFactoryInstance.getAllActiveMarkets();
-        assertGe(activeMarkets.length, 1);
-
-        // Should contain our new market
-        bool found = false;
-        for (uint256 i = 0; i < activeMarkets.length; i++) {
-            if (activeMarkets[i].baseAsset == address(baseAsset1)) {
-                found = true;
-                break;
-            }
-        }
-        assertTrue(found);
+        // Note: getAllActiveMarkets() was removed - testing market existence via direct lookup
+        assertTrue(marketFactoryInstance.isMarketActive(charlie, address(baseAsset1)), "Market should be active");
     }
 
     function testCannotCreateMarketWithZeroAddress() public {
@@ -71,6 +64,12 @@ contract MarketFactoryTest is BasicDeploy {
     }
 
     function testCannotCreateDuplicateMarket() public {
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        vm.prank(guardian);
+        tokenInstance.transfer(charlie, 10000 ether); // Transfer 10,000 tokens
+        vm.prank(charlie);
+        tokenInstance.approve(address(marketFactoryInstance), 200 ether); // Approve for 2 potential market creations
+
         // Create first market
         vm.prank(charlie);
         marketFactoryInstance.createMarket(address(baseAsset1), "Test Market", "TMKT");
@@ -87,31 +86,7 @@ contract MarketFactoryTest is BasicDeploy {
         marketFactoryInstance.createMarket(address(baseAsset1), "Test Market", "TMKT");
     }
 
-    function testGetAllActiveMarkets() public {
-        uint256 initialMarkets = marketFactoryInstance.getAllActiveMarkets().length;
-
-        // Create first market
-        vm.prank(charlie);
-        marketFactoryInstance.createMarket(address(baseAsset1), "Test Market 1", "TM1");
-
-        // Create second market
-        vm.prank(charlie);
-        marketFactoryInstance.createMarket(address(baseAsset2), "Test Market 2", "TM2");
-
-        // Get all active markets
-        IPROTOCOL.Market[] memory activeMarkets = marketFactoryInstance.getAllActiveMarkets();
-        assertEq(activeMarkets.length, initialMarkets + 2);
-
-        // Check that our markets are included
-        bool found1 = false;
-        bool found2 = false;
-        for (uint256 i = 0; i < activeMarkets.length; i++) {
-            if (activeMarkets[i].baseAsset == address(baseAsset1)) found1 = true;
-            if (activeMarkets[i].baseAsset == address(baseAsset2)) found2 = true;
-        }
-        assertTrue(found1);
-        assertTrue(found2);
-    }
+    // Note: getAllActiveMarkets() function was removed
 
     // ============ ZeroAddress Error Tests ============
 
@@ -119,7 +94,7 @@ contract MarketFactoryTest is BasicDeploy {
         LendefiMarketFactory factoryImpl = new LendefiMarketFactory();
 
         // Get network addresses for test
-        (address networkUSDC, address networkWETH, address UsdcWethPool) = getNetworkAddresses();
+        (address networkUSDT, address networkWBNB, address UsdtWbnbPool) = getNetworkAddresses();
 
         // Try to deploy proxy with zero timelock in init data
         bytes memory initData = abi.encodeWithSelector(
@@ -128,9 +103,9 @@ contract MarketFactoryTest is BasicDeploy {
             address(tokenInstance),
             address(gnosisSafe),
             address(ecoInstance),
-            networkUSDC,
-            networkWETH,
-            UsdcWethPool
+            networkUSDT,
+            networkWBNB,
+            UsdtWbnbPool
         );
 
         vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
@@ -141,7 +116,7 @@ contract MarketFactoryTest is BasicDeploy {
         LendefiMarketFactory factoryImpl = new LendefiMarketFactory();
 
         // Get network addresses for test
-        (address networkUSDC, address networkWETH, address UsdcWethPool) = getNetworkAddresses();
+        (address networkUSDT, address networkWBNB, address UsdtWbnbPool) = getNetworkAddresses();
 
         bytes memory initData = abi.encodeWithSelector(
             LendefiMarketFactory.initialize.selector,
@@ -149,9 +124,9 @@ contract MarketFactoryTest is BasicDeploy {
             address(0),
             address(gnosisSafe),
             address(ecoInstance),
-            networkUSDC,
-            networkWETH,
-            UsdcWethPool
+            networkUSDT,
+            networkWBNB,
+            UsdtWbnbPool
         );
 
         vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
@@ -162,7 +137,7 @@ contract MarketFactoryTest is BasicDeploy {
         LendefiMarketFactory factoryImpl = new LendefiMarketFactory();
 
         // Get network addresses for test
-        (address networkUSDC, address networkWETH, address UsdcWethPool) = getNetworkAddresses();
+        (address networkUSDT, address networkWBNB, address UsdtWbnbPool) = getNetworkAddresses();
 
         bytes memory initData = abi.encodeWithSelector(
             LendefiMarketFactory.initialize.selector,
@@ -170,9 +145,9 @@ contract MarketFactoryTest is BasicDeploy {
             address(tokenInstance),
             address(gnosisSafe),
             address(0),
-            networkUSDC,
-            networkWETH,
-            UsdcWethPool
+            networkUSDT,
+            networkWBNB,
+            UsdtWbnbPool
         );
 
         vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
@@ -183,7 +158,7 @@ contract MarketFactoryTest is BasicDeploy {
         LendefiMarketFactory factoryImpl = new LendefiMarketFactory();
 
         // Get network addresses for test
-        (address networkUSDC, address networkWETH, address UsdcWethPool) = getNetworkAddresses();
+        (address networkUSDT, address networkWBNB, address UsdtWbnbPool) = getNetworkAddresses();
 
         bytes memory initData = abi.encodeWithSelector(
             LendefiMarketFactory.initialize.selector,
@@ -191,9 +166,9 @@ contract MarketFactoryTest is BasicDeploy {
             address(tokenInstance),
             address(0),
             address(ecoInstance),
-            networkUSDC,
-            networkWETH,
-            UsdcWethPool
+            networkUSDT,
+            networkWBNB,
+            UsdtWbnbPool
         );
 
         vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));

@@ -32,18 +32,13 @@ contract LendefiAssetsBranchTest is BasicDeploy {
         // Deploy a separate assets proxy for upgrade testing
         // The market-based deployment gives us cloned assets modules, but upgrade tests need UUPS proxies
         LendefiPoRFeed porFeedImpl = new LendefiPoRFeed();
+
+        // Get network addresses for test
         (address networkUSDC, address networkWETH, address UsdcWethPool) = getNetworkAddresses();
+
         bytes memory initData = abi.encodeCall(
             LendefiAssets.initialize,
-            (
-                address(timelockInstance),
-                charlie,
-                address(porFeedImpl),
-                address(marketCoreInstance),
-                networkUSDC,
-                networkWETH,
-                UsdcWethPool
-            )
+            (address(timelockInstance), charlie, address(porFeedImpl), ethereum, networkUSDC, networkWETH, UsdcWethPool)
         );
         address payable assetsProxy = payable(Upgrades.deployUUPSProxy("LendefiAssets.sol", initData));
         assetsProxyForUpgrades = LendefiAssets(assetsProxy);
@@ -302,7 +297,7 @@ contract LendefiAssetsBranchTest is BasicDeploy {
 
     function test_4_4_ChainlinkOracleTimeout() public {
         // Set oracle to return old price
-        uint256 oldTimestamp = block.timestamp - 10 hours; // Assuming freshnessThreshold is 8 hours
+        uint256 oldTimestamp = block.timestamp - 9 hours; // Freshness threshold is 8 hours for Ethereum mainnet
         mockChainlinkOracle.setTimestamp(oldTimestamp);
 
         vm.expectRevert(
@@ -311,7 +306,7 @@ contract LendefiAssetsBranchTest is BasicDeploy {
                 address(mockChainlinkOracle),
                 oldTimestamp,
                 block.timestamp,
-                28800 // 8 hours default freshness
+                28800 // 8 hours default freshness for Ethereum mainnet
             )
         );
         assetsInstance.getAssetPriceByType(address(wethInstance), IASSETS.OracleType.CHAINLINK);

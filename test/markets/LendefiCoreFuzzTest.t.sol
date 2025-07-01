@@ -18,10 +18,6 @@ contract LendefiCoreFuzzTest is BasicDeploy {
         // Deploy base contracts and market
         deployMarketsWithUSDC();
 
-        // Setup TGE
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
-
         // Deploy test tokens
         wethInstance = new WETH9();
 
@@ -267,7 +263,7 @@ contract LendefiCoreFuzzTest is BasicDeploy {
         debtRatio = bound(debtRatio, 0, 150); // 0-150% (test over-liquidation)
 
         // Calculate WETH amount for target collateral value
-        uint256 wethAmount = (collateralValue * 1e18) / ETH_PRICE * 1e8 / 10 ** usdcInstance.decimals();
+        uint256 wethAmount = (((collateralValue * 1e18) / ETH_PRICE) * 1e8) / 10 ** usdcInstance.decimals();
 
         // Create position
         uint256 positionId = _createPosition(bob, address(wethInstance), false);
@@ -337,7 +333,7 @@ contract LendefiCoreFuzzTest is BasicDeploy {
         // Calculate total value - handle potential precision issues
         try marketCoreInstance.calculateCollateralValue(bob, positionId) returns (uint256 totalValue) {
             // Expected values with proper precision handling
-            uint256 expectedWethValue = (wethAmount * ETH_PRICE) / 1e18 * 10 ** usdcInstance.decimals() / 1e8;
+            uint256 expectedWethValue = (((wethAmount * ETH_PRICE) / 1e18) * 10 ** usdcInstance.decimals()) / 1e8;
             uint256 expectedTotalValue = expectedWethValue + usdcAmount;
 
             // For very small amounts, we might have precision issues
@@ -386,7 +382,7 @@ contract LendefiCoreFuzzTest is BasicDeploy {
             if (marketCoreInstance.isLiquidatable(bob, positionId)) {
                 uint256 debt = marketCoreInstance.calculateDebtWithInterest(bob, positionId);
                 uint256 liquidationFee = marketCoreInstance.getPositionLiquidationFee(bob, positionId);
-                uint256 totalCost = debt + (debt * liquidationFee / 1e6);
+                uint256 totalCost = debt + ((debt * liquidationFee) / 1e6);
 
                 // Liquidate
                 deal(address(usdcInstance), liquidator, totalCost);

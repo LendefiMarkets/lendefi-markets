@@ -49,10 +49,6 @@ contract LendefiCoreTest is BasicDeploy {
         baseDecimals = usdcInstance.decimals();
         initialLiquidity = 1_000_000 * 10 ** baseDecimals; // 1M USDC
 
-        // Setup TGE
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
-
         // Deploy test tokens
         wethInstance = new WETH9();
         rwaToken = new MockRWA("Real World Asset", "RWA");
@@ -186,9 +182,7 @@ contract LendefiCoreTest is BasicDeploy {
         LendefiPositionVault vaultImpl = new LendefiPositionVault();
 
         vm.expectRevert(); // Expect revert for already initialized
-        marketCoreInstance.initialize(
-            address(timelockInstance), charlie, address(tokenInstance), address(vaultImpl)
-        );
+        marketCoreInstance.initialize(address(timelockInstance), charlie, address(tokenInstance), address(vaultImpl));
     }
 
     function test_Revert_InitializeWithZeroAddress() public {
@@ -655,7 +649,7 @@ contract LendefiCoreTest is BasicDeploy {
 
         uint256 debt = marketCoreInstance.calculateDebtWithInterest(bob, positionId);
         uint256 liquidationFee = marketCoreInstance.getPositionLiquidationFee(bob, positionId);
-        uint256 totalCost = debt + (debt * liquidationFee / 10 ** baseDecimals);
+        uint256 totalCost = debt + ((debt * liquidationFee) / 10 ** baseDecimals);
 
         // Liquidate
         vm.startPrank(liquidator);
@@ -1280,7 +1274,7 @@ contract LendefiCoreTest is BasicDeploy {
         assertTrue(accruedInterest > 0, "Interest should have accrued");
 
         uint256 liquidationFee = marketCoreInstance.getPositionLiquidationFee(bob, positionId);
-        uint256 totalCost = debtWithInterest + (debtWithInterest * liquidationFee / 10 ** baseDecimals);
+        uint256 totalCost = debtWithInterest + ((debtWithInterest * liquidationFee) / 10 ** baseDecimals);
 
         // Don't check exact event parameters since interest calculation may vary slightly
         // Just verify the events are emitted
@@ -1333,7 +1327,7 @@ contract LendefiCoreTest is BasicDeploy {
         // Liquidate first position
         uint256 debt1WithInterest = marketCoreInstance.calculateDebtWithInterest(bob, positionId1);
         uint256 liquidationFee1 = marketCoreInstance.getPositionLiquidationFee(bob, positionId1);
-        uint256 totalCost1 = debt1WithInterest + (debt1WithInterest * liquidationFee1 / 10 ** baseDecimals);
+        uint256 totalCost1 = debt1WithInterest + ((debt1WithInterest * liquidationFee1) / 10 ** baseDecimals);
 
         vm.startPrank(liquidator);
         usdcInstance.approve(address(marketCoreInstance), totalCost1);
@@ -1343,7 +1337,7 @@ contract LendefiCoreTest is BasicDeploy {
         // Liquidate second position
         uint256 debt2WithInterest = marketCoreInstance.calculateDebtWithInterest(charlie, positionId2);
         uint256 liquidationFee2 = marketCoreInstance.getPositionLiquidationFee(charlie, positionId2);
-        uint256 totalCost2 = debt2WithInterest + (debt2WithInterest * liquidationFee2 / 10 ** baseDecimals);
+        uint256 totalCost2 = debt2WithInterest + ((debt2WithInterest * liquidationFee2) / 10 ** baseDecimals);
 
         vm.startPrank(liquidator);
         usdcInstance.approve(address(marketCoreInstance), totalCost2);

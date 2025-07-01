@@ -42,9 +42,7 @@ contract UpdateTierConfigTest is BasicDeploy {
         // Deploy all contracts including the Oracle module
         deployMarketsWithUSDC();
 
-        // TGE setup
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
+        // TGE already initialized in deployMarketsWithUSDC()
 
         // Deploy WETH (already have usdcInstance from deployCompleteWithOracle)
         wethInstance = new WETH9();

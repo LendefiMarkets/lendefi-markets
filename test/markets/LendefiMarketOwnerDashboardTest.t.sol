@@ -33,15 +33,17 @@ contract LendefiMarketOwnerDashboardTest is BasicDeploy {
         marketFactoryInstance.addAllowedBaseAsset(address(wethToken));
         vm.stopPrank();
 
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        vm.prank(guardian);
+        tokenInstance.transfer(charlie, 10000 ether); // Transfer 10,000 tokens
+        vm.prank(charlie);
+        tokenInstance.approve(address(marketFactoryInstance), 200 ether); // Approve for 2 markets (100 each)
+
         // Create additional markets for charlie
         vm.startPrank(charlie);
         marketFactoryInstance.createMarket(address(daiToken), "Lendefi DAI Market", "lfDAI");
         marketFactoryInstance.createMarket(address(wethToken), "Lendefi WETH Market", "lfWETH");
         vm.stopPrank();
-
-        // Setup TGE
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
 
         // Fund users for testing
         deal(address(usdcInstance), alice, getUSDCAmount(10000));
@@ -138,9 +140,15 @@ contract LendefiMarketOwnerDashboardTest is BasicDeploy {
         bool foundWETH = false;
 
         for (uint256 i = 0; i < stats.managedBaseAssets.length; i++) {
-            if (stats.managedBaseAssets[i] == address(usdcInstance)) foundUSDC = true;
-            if (stats.managedBaseAssets[i] == address(daiToken)) foundDAI = true;
-            if (stats.managedBaseAssets[i] == address(wethToken)) foundWETH = true;
+            if (stats.managedBaseAssets[i] == address(usdcInstance)) {
+                foundUSDC = true;
+            }
+            if (stats.managedBaseAssets[i] == address(daiToken)) {
+                foundDAI = true;
+            }
+            if (stats.managedBaseAssets[i] == address(wethToken)) {
+                foundWETH = true;
+            }
         }
 
         assertTrue(foundUSDC && foundDAI && foundWETH, "Not all assets found in managed assets");
@@ -209,7 +217,9 @@ contract LendefiMarketOwnerDashboardTest is BasicDeploy {
         bool foundWETH = false;
 
         for (uint256 i = 0; i < analytics.length; i++) {
-            if (analytics[i].baseAsset == address(usdcInstance)) foundUSDC = true;
+            if (analytics[i].baseAsset == address(usdcInstance)) {
+                foundUSDC = true;
+            }
             if (analytics[i].baseAsset == address(daiToken)) foundDAI = true;
             if (analytics[i].baseAsset == address(wethToken)) foundWETH = true;
 
@@ -285,9 +295,12 @@ contract LendefiMarketOwnerDashboardTest is BasicDeploy {
         // Create a second market owner to test owner-specific filtering
         address david = makeAddr("david");
 
-        // Grant MARKET_OWNER_ROLE to david
-        vm.prank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, david);
+        // Setup governance tokens for david (required for permissionless market creation)
+        // Use deal to give david tokens directly (test environment)
+        deal(address(tokenInstance), david, 10000 ether);
+
+        vm.prank(david);
+        tokenInstance.approve(address(marketFactoryInstance), type(uint256).max); // Give unlimited approval
 
         // David creates his own market
         vm.startPrank(david);

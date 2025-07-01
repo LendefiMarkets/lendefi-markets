@@ -1,11 +1,11 @@
 {
   "name": "lendefi-markets",
-  "private": true,
+  "private": false,
   "description": "Lendefi Markets Contracts",
-  "homepage": "https://github.com/nebula-labs-xyz/lendefi-markets#readme",
+  "homepage": "https://github.com/LendefiMarkets/lendefi-markets#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nebula-labs-xyz/lendefi-markets.git"
+    "url": "git+https://github.com/LendefiMarkets/lendefi-markets.git"
   },
   "license": "BUSL-1.1",
   "author": "Nebula Holding Inc",

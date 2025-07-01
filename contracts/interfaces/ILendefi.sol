@@ -45,7 +45,9 @@ interface ILENDEFI is IERC20, IERC20Metadata {
     /// @param implementation implementation address
     /// @param scheduledTime when upgrade was scheduled
     /// @param effectiveTime when upgrade can be executed
-    event UpgradeScheduled(address indexed src, address indexed implementation, uint64 scheduledTime, uint64 effectiveTime);
+    event UpgradeScheduled(
+        address indexed src, address indexed implementation, uint64 scheduledTime, uint64 effectiveTime
+    );
 
     /// @dev event emitted when upgrade is cancelled
     /// @param src sender address

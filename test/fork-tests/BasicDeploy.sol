@@ -51,7 +51,7 @@ contract BasicDeploy is Test {
     LendefiMarketFactory internal marketFactoryInstance;
     LendefiCore internal marketCoreInstance;
     LendefiMarketVault internal marketVaultInstance;
-    
+
     // Fork test specific IERC20 instances
     IERC20 usdcInstance = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); //real usdc ethereum for fork testing
     IERC20 usdtInstance = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7); //real usdt ethereum for fork testing
@@ -172,6 +172,10 @@ contract BasicDeploy is Test {
             address(assetsImpl),
             address(porFeedImpl)
         );
+
+        // TGE setup - MUST be done before market creation to give guardian tokens
+        vm.prank(guardian);
+        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
     }
 
     /**
@@ -187,13 +191,20 @@ contract BasicDeploy is Test {
         require(marketFactoryInstance.coreImplementation() != address(0), "Core implementation not set");
         require(marketFactoryInstance.vaultImplementation() != address(0), "Vault implementation not set");
 
-        // Grant MARKET_OWNER_ROLE to charlie (done by multisig which has DEFAULT_ADMIN_ROLE)
-        vm.prank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, charlie);
+        // NOTE: MARKET_OWNER_ROLE no longer required - market creation is now permissionless with governance token requirement
 
         // Add base asset to allowlist (done by multisig which has MANAGER_ROLE)
         vm.prank(gnosisSafe);
         marketFactoryInstance.addAllowedBaseAsset(baseAsset);
+
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        // Transfer governance tokens from guardian to charlie (guardian received DEPLOYER_SHARE during TGE)
+        vm.prank(guardian);
+        tokenInstance.transfer(charlie, 10000 ether); // Transfer 10,000 tokens (more than the 1000 required)
+
+        // Charlie approves factory to spend governance tokens
+        vm.prank(charlie);
+        tokenInstance.approve(address(marketFactoryInstance), 100 ether); // Approve the 100 tokens that will be transferred
 
         // Create market via factory (charlie as market owner)
         vm.prank(charlie);
@@ -211,6 +222,8 @@ contract BasicDeploy is Test {
         // Grant necessary roles
         vm.startPrank(address(timelockInstance));
         ecoInstance.grantRole(REWARDER_ROLE, address(marketCoreInstance));
+        // Grant market owner MANAGER_ROLE on vault (since factory can't do it without DEFAULT_ADMIN_ROLE)
+        marketVaultInstance.grantRole(LendefiConstants.MANAGER_ROLE, charlie);
         vm.stopPrank();
     }
 

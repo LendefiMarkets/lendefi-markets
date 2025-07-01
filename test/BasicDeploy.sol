@@ -101,6 +101,35 @@ contract BasicDeploy is Test {
     USDC internal usdcInstance;
     // IERC20 usdcInstance = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); //real usdc ethereum for fork testing
 
+    // ==================== NETWORK CONFIGURATION ====================
+
+    /**
+     * @notice Get network-specific addresses for oracle validation
+     * @dev Returns appropriate addresses based on chain ID
+     * @return networkUSDC The USDC address for this network
+     * @return networkWETH The WETH address for this network
+     * @return UsdcWethPool The USDC/WETH pool address for this network
+     */
+    function getNetworkAddresses() internal returns (address networkUSDC, address networkWETH, address UsdcWethPool) {
+        if (block.chainid == LendefiConstants.ETHEREUM_CHAIN_ID) {
+            // Ethereum mainnet addresses
+            networkUSDC = LendefiConstants.ETHEREUM_USDC;
+            networkWETH = LendefiConstants.ETHEREUM_WETH;
+            UsdcWethPool = LendefiConstants.USDC_ETH_POOL;
+        } else {
+            // Testnet or other networks - use mock/deployed addresses
+            // Deploy WETH if not already deployed
+            if (address(wethInstance) == address(0)) {
+                wethInstance = new WETH9();
+            }
+            networkUSDC = address(usdcInstance);
+            networkWETH = address(wethInstance);
+            // For testnets, we'll need to deploy a mock pool or use a placeholder
+            // This should be set to a real pool address in actual testnet deployment
+            UsdcWethPool = address(0x1234567890123456789012345678901234567890); // Placeholder for testnet
+        }
+    }
+
     // ==================== DYNAMIC AMOUNT HELPERS ====================
 
     /**
@@ -123,26 +152,6 @@ contract BasicDeploy is Test {
      */
     function getTokenAmount(address token, uint256 baseAmount) internal view returns (uint256) {
         return baseAmount * 10 ** IERC20Metadata(token).decimals();
-    }
-
-    function getNetworkAddresses() internal returns (address networkUSDC, address networkWETH, address UsdcWethPool) {
-        if (block.chainid == LendefiConstants.ETHEREUM_CHAIN_ID) {
-            // Ethereum mainnet addresses
-            networkUSDC = LendefiConstants.ETHEREUM_USDC;
-            networkWETH = LendefiConstants.ETHEREUM_WETH;
-            UsdcWethPool = LendefiConstants.USDC_WETH_POOL;
-        } else {
-            // Testnet or other networks - use mock/deployed addresses
-            // Deploy WETH if not already deployed
-            if (address(wethInstance) == address(0)) {
-                wethInstance = new WETH9();
-            }
-            networkUSDC = address(usdcInstance);
-            networkWETH = address(wethInstance);
-            // For testnets, we'll need to deploy a mock pool or use a placeholder
-            // This should be set to a real pool address in actual testnet deployment
-            UsdcWethPool = address(0x1234567890123456789012345678901234567890); // Placeholder for testnet
-        }
     }
 
     function deployTokenUpgrade() internal {
@@ -760,16 +769,18 @@ contract BasicDeploy is Test {
         // Assert that upgrade was successful
         assertEq(marketFactoryInstanceV2.version(), 2, "Version not incremented to 2");
         assertFalse(implAddressV2 == implAddressV1, "Implementation address didn't change");
-        assertTrue(
-            marketFactoryInstanceV2.hasRole(DEFAULT_ADMIN_ROLE, gnosisSafe), "Lost DEFAULT_ADMIN_ROLE"
-        );
+        assertTrue(marketFactoryInstanceV2.hasRole(DEFAULT_ADMIN_ROLE, gnosisSafe), "Lost DEFAULT_ADMIN_ROLE");
 
         // Test role management still works - gnosisSafe should have admin control
         vm.startPrank(gnosisSafe);
-        marketFactoryInstanceV2.grantRole(UPGRADER_ROLE, alice);
-        assertTrue(marketFactoryInstanceV2.hasRole(UPGRADER_ROLE, alice), "Should grant UPGRADER_ROLE");
-        marketFactoryInstanceV2.revokeRole(UPGRADER_ROLE, alice);
-        assertFalse(marketFactoryInstanceV2.hasRole(UPGRADER_ROLE, alice), "Should revoke UPGRADER_ROLE");
+        marketFactoryInstanceV2.grantRole(UPGRADER_ROLE, address(timelockInstance));
+        assertTrue(
+            marketFactoryInstanceV2.hasRole(UPGRADER_ROLE, address(timelockInstance)), "Should grant UPGRADER_ROLE"
+        );
+        marketFactoryInstanceV2.revokeRole(UPGRADER_ROLE, address(timelockInstance));
+        assertFalse(
+            marketFactoryInstanceV2.hasRole(UPGRADER_ROLE, address(timelockInstance)), "Should revoke UPGRADER_ROLE"
+        );
         vm.stopPrank();
     }
 
@@ -839,13 +850,20 @@ contract BasicDeploy is Test {
         require(marketFactoryInstance.coreImplementation() != address(0), "Core implementation not set");
         require(marketFactoryInstance.vaultImplementation() != address(0), "Vault implementation not set");
 
-        // Grant MARKET_OWNER_ROLE to charlie (done by multisig which has DEFAULT_ADMIN_ROLE)
-        vm.prank(gnosisSafe);
-        marketFactoryInstance.grantRole(LendefiConstants.MARKET_OWNER_ROLE, charlie);
+        // NOTE: MARKET_OWNER_ROLE no longer required - market creation is now permissionless with governance token requirement
 
         // Add base asset to allowlist (done by multisig which has MANAGER_ROLE)
         vm.prank(gnosisSafe);
         marketFactoryInstance.addAllowedBaseAsset(baseAsset);
+
+        // Setup governance tokens for charlie (required for permissionless market creation)
+        // Transfer governance tokens from guardian to charlie (guardian received DEPLOYER_SHARE during TGE)
+        vm.prank(guardian);
+        tokenInstance.transfer(charlie, 10000 ether); // Transfer 10,000 tokens (more than the 1000 required)
+
+        // Charlie approves factory to spend governance tokens
+        vm.prank(charlie);
+        tokenInstance.approve(address(marketFactoryInstance), 100 ether); // Approve the 100 tokens that will be transferred
 
         // Create market via factory (charlie as market owner)
         vm.prank(charlie);
@@ -884,6 +902,12 @@ contract BasicDeploy is Test {
         // if (address(assetsInstance) == address(0)) _deployAssetsModule();
 
         if (address(usdcInstance) == address(0)) usdcInstance = new USDC();
+
+        // Initialize TGE if not already done (gives guardian initial token allocation)
+        if (tokenInstance.tge() == 0) {
+            vm.prank(guardian);
+            tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
+        }
 
         // Deploy market factory
         _deployMarketFactory();

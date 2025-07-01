@@ -68,10 +68,6 @@ contract USD1ForkTest is BasicDeploy {
         timelockInstance.grantRole(CANCELLER_ROLE, address(govInstance));
         vm.stopPrank();
 
-        // TGE setup - but DON'T warp time
-        vm.prank(guardian);
-        tokenInstance.initializeTGE(address(ecoInstance), address(treasuryInstance));
-
         // Configure assets
         _configureWETH();
         _configureWBTC();

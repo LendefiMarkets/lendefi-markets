@@ -11,15 +11,15 @@ import {AggregatorV3Interface} from
 import {IUniswapV3Pool} from "../../contracts/interfaces/IUniswapV3Pool.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-contract WETHForkTest is BasicDeploy {
+contract USDCForkTest is BasicDeploy {
     // Mainnet addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
     address constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA;
 
-    // Pools and oracles - Using WETH pools instead of USDC pools
+    // Pools and oracles
     address constant LINK_WETH_POOL = 0xa6Cc3C2531FdaA6Ae1A3CA84c2855806728693e8;
-    address constant WBTC_WETH_POOL = 0xCBCdF9626bC03E24f779434178A73a0B4bad62eD;
+    address constant WBTC_USDC_POOL = 0x99ac8cA7087fA4A2A1FB6357269965A2014ABc35;
     address constant WETH_USDC_POOL = 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640;
 
     address constant WETH_CHAINLINK_ORACLE = 0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419;
@@ -47,8 +47,8 @@ contract WETHForkTest is BasicDeploy {
         _deployGovernor();
         _deployMarketFactory();
 
-        // Deploy WETH market instead of USDC market
-        _deployMarket(WETH, "Lendefi Yield Token WETH", "LYTWETH");
+        // Deploy USDC market
+        _deployMarket(address(usdcInstance), "Lendefi Yield Token", "LYTUSDC");
 
         // Now warp to current time to match oracle data
         vm.warp(1748748827 + 3600); // Oracle timestamp + 1 hour
@@ -67,7 +67,7 @@ contract WETHForkTest is BasicDeploy {
         timelockInstance.grantRole(CANCELLER_ROLE, address(govInstance));
         vm.stopPrank();
 
-        // Configure assets - WETH is now base asset, others are collateral
+        // Configure assets
         _configureWETH();
         _configureWBTC();
         _configureLINK();
@@ -77,14 +77,14 @@ contract WETHForkTest is BasicDeploy {
     function _configureWETH() internal {
         vm.startPrank(address(timelockInstance));
 
-        // Configure WETH as base asset - adjusted for base asset use
+        // Configure WETH with updated struct format
         assetsInstance.updateAssetConfig(
             WETH,
             IASSETS.Asset({
                 active: 1,
                 decimals: 18,
-                borrowThreshold: 950, // Base asset still needs thresholds
-                liquidationThreshold: 980,
+                borrowThreshold: 800,
+                liquidationThreshold: 850,
                 maxSupplyThreshold: 1_000_000 ether,
                 isolationDebtCap: 0,
                 assetMinimumOracles: 1,
@@ -102,7 +102,7 @@ contract WETHForkTest is BasicDeploy {
     function _configureWBTC() internal {
         vm.startPrank(address(timelockInstance));
 
-        // Configure WBTC with WETH pool instead of USDC pool
+        // Configure WBTC with updated struct format
         assetsInstance.updateAssetConfig(
             WBTC,
             IASSETS.Asset({
@@ -117,7 +117,7 @@ contract WETHForkTest is BasicDeploy {
                 primaryOracleType: IASSETS.OracleType.CHAINLINK,
                 tier: IASSETS.CollateralTier.CROSS_A,
                 chainlinkConfig: IASSETS.ChainlinkOracleConfig({oracleUSD: WBTC_CHAINLINK_ORACLE, active: 1}),
-                poolConfig: IASSETS.UniswapPoolConfig({pool: WBTC_WETH_POOL, twapPeriod: 1800, active: 1})
+                poolConfig: IASSETS.UniswapPoolConfig({pool: WBTC_USDC_POOL, twapPeriod: 1800, active: 1})
             })
         );
 
@@ -127,7 +127,7 @@ contract WETHForkTest is BasicDeploy {
     function _configureLINK() internal {
         vm.startPrank(address(timelockInstance));
 
-        // Configure LINK using the WETH pool approach
+        // Configure LINK using the ETH bridge approach
         assetsInstance.updateAssetConfig(
             LINK,
             IASSETS.Asset({
@@ -152,7 +152,8 @@ contract WETHForkTest is BasicDeploy {
     function _configureUSDC() internal {
         vm.startPrank(address(timelockInstance));
 
-        // Configure USDC as collateral asset
+        // Configure USDC - since it's handled specially in getAssetPrice, we just need minimal config
+        // Use a dummy oracle address since the price will be overridden to 1e6
         assetsInstance.updateAssetConfig(
             address(usdcInstance),
             IASSETS.Asset({
@@ -166,7 +167,10 @@ contract WETHForkTest is BasicDeploy {
                 porFeed: address(0),
                 primaryOracleType: IASSETS.OracleType.CHAINLINK,
                 tier: IASSETS.CollateralTier.STABLE,
-                chainlinkConfig: IASSETS.ChainlinkOracleConfig({oracleUSD: USDC_CHAINLINK_ORACLE, active: 1}),
+                chainlinkConfig: IASSETS.ChainlinkOracleConfig({
+                    oracleUSD: USDC_CHAINLINK_ORACLE, // Dummy address - won't be used due to special handling
+                    active: 1
+                }),
                 poolConfig: IASSETS.UniswapPoolConfig({pool: address(0), twapPeriod: 0, active: 0})
             })
         );
@@ -218,11 +222,6 @@ contract WETHForkTest is BasicDeploy {
 
         console2.log("WBTC Chainlink price:", chainlinkPrice);
         console2.log("WBTC Uniswap price:", uniswapPrice);
-        console2.log("WBTC Chainlink price in USD:", chainlinkPrice / 1e6);
-        console2.log("WBTC Uniswap price in massive units:", uniswapPrice);
-
-        // This shows the scale difference
-        console2.log("Chainlink vs Uniswap ratio:", uniswapPrice / chainlinkPrice);
 
         // Calculate expected median
         uint256 expectedMedian = (chainlinkPrice + uniswapPrice) / 2;
@@ -385,12 +384,12 @@ contract WETHForkTest is BasicDeploy {
         // Identify other token in the pool
         address otherToken = isToken0 ? token1 : token0;
 
-        // Always use WETH as quote token if it's in the pool (since WETH is our base asset)
+        // Always use USDC as quote token if it's in the pool
         address quoteToken;
-        if (otherToken == WETH) {
-            quoteToken = WETH;
+        if (otherToken == address(usdcInstance)) {
+            quoteToken = address(usdcInstance);
         } else {
-            // If not a WETH pair, use the other token as quote
+            // If not a USDC pair, use the other token as quote
             quoteToken = otherToken;
         }
 
@@ -399,11 +398,11 @@ contract WETHForkTest is BasicDeploy {
 
         // Calculate optimal decimalsUniswap based on asset decimals
         uint8 decimalsUniswap;
-        if (quoteToken == WETH) {
-            // For WETH-quoted prices, use 8 decimals (standard)
+        if (quoteToken == address(usdcInstance)) {
+            // For USD-quoted prices, use 8 decimals (standard)
             decimalsUniswap = 8;
         } else {
-            // For non-WETH quotes, add 2 extra precision digits to asset decimals
+            // For non-USD quotes, add 2 extra precision digits to asset decimals
             decimalsUniswap = uint8(assetDecimals) + 2;
         }
 
@@ -443,10 +442,10 @@ contract WETHForkTest is BasicDeploy {
         assertTrue(linkPriceInUSD < 20 * 1e6, "LINK price should be less than $20");
     }
 
-    function test_getAnyPoolTokenPriceInUSD_WBTCWETH() public {
+    function test_getAnyPoolTokenPriceInUSD_WBTCUSDC() public {
         uint256 wbtcPriceInUSD = assetsInstance.getAssetPrice(WBTC);
         // Log the WBTC price in USD
-        console2.log("WBTC price in USD (from WBTC/WETH pool):", wbtcPriceInUSD);
+        console2.log("WBTC price in USD (from WBTC/USDC pool):", wbtcPriceInUSD);
 
         // Assert that the price is within a reasonable range (e.g., $90,000 to $120,000)
         assertTrue(wbtcPriceInUSD > 90000 * 1e6, "WBTC price should be greater than $90,000");

@@ -165,12 +165,10 @@ contract LendefiCoreV2 is
     /// @param marketOwner Address of the market owner who will have management privileges
     /// @param govToken_ Address of the governance token contract
     /// @param positionVault Address of the cloneable vault implementation
-    function initialize(
-        address admin,
-        address marketOwner,
-        address govToken_,
-        address positionVault
-    ) external initializer {
+    function initialize(address admin, address marketOwner, address govToken_, address positionVault)
+        external
+        initializer
+    {
         if (admin == address(0)) revert ZeroAddressNotAllowed();
         if (marketOwner == address(0)) revert ZeroAddressNotAllowed();
         if (govToken_ == address(0)) revert ZeroAddressNotAllowed();

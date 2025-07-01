@@ -143,8 +143,8 @@ contract LendefiPoRFeed is AggregatorV3Interface, Initializable {
 
         // Initialize with round ID 1
         latestRoundId = 1;
-        rounds[latestRoundId] =
-            Round({answer: 0, startedAt: block.timestamp, updatedAt: block.timestamp, answeredInRound: 1});
+        uint256 timestamp = block.timestamp;
+        rounds[latestRoundId] = Round({answer: 0, startedAt: timestamp, updatedAt: timestamp, answeredInRound: 1});
     }
     // ========== UPDATE FUNCTIONS ==========
 

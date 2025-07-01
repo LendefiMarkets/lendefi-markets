@@ -17,9 +17,9 @@
 
 ## Executive Summary
 
-The Lendefi Protocol represents a next-generation composable lending infrastructure that enables the creation of independent, isolated lending markets for different base assets. Unlike traditional monolithic lending protocols, Lendefi implements a factory-based architecture where each market operates as an autonomous lending pool with its own base asset, liquidity providers, and risk parameters. This design enables unprecedented flexibility, scalability, and risk isolation while maintaining the sophisticated features expected from modern DeFi protocols.
+The Lendefi Protocol represents a next-generation composable lending infrastructure that enables the creation of independent, isolated lending markets for different base assets in a permissionless manner. Unlike traditional monolithic lending protocols, Lendefi implements a factory-based architecture where each market operates as an autonomous lending pool with its own base asset, liquidity providers, and risk parameters. This design enables unprecedented flexibility, scalability, and risk isolation while maintaining the sophisticated features expected from modern DeFi protocols.
 
-For more information visit [Nebula Labs](https://nebula-labs.xyz).
+For more information visit [Lendefi Markets](https://lendefimarkets.com).
 
 ## Architecture & Design
 
@@ -105,11 +105,53 @@ Each market deployment includes:
 
 ### Market Lifecycle
 
-1. **Deployment**: Admin creates new market via factory
-2. **Initialization**: Market components are deployed and linked
-3. **Configuration**: Risk parameters and collateral assets are configured
+1. **Deployment**: Anyone can create new markets via permissionless factory (with governance token requirements)
+2. **Initialization**: Market components are deployed and linked automatically
+3. **Configuration**: Risk parameters and collateral assets are configured by market creators
 4. **Operation**: Users can supply liquidity, borrow, and manage positions
 5. **Upgrades**: Individual markets can be upgraded without affecting others
+
+### Permissionless Market Creation
+
+The protocol now features **permissionless market creation**, enabling anyone to deploy new lending markets:
+
+#### Requirements for Market Creation
+
+- **Governance Token Balance**: Must hold at least 1,000 $LEND tokens
+- **Market Creation Fee**: Pay 100 $LEND tokens per market created
+- **Rate Limiting**: Maximum 21 markets per address (configurable)
+- **Asset Allowlist**: Base asset must be approved by protocol governance
+
+#### Market Creation Process
+
+```solidity
+// 1. Ensure you have enough governance tokens
+require(govToken.balanceOf(creator) >= 1000 ether, "Insufficient balance");
+
+// 2. Approve the factory to spend creation fee
+govToken.approve(address(factory), 100 ether);
+
+// 3. Create market (fee automatically deducted)
+factory.createMarket(
+    NEW_TOKEN_ADDRESS,
+    "Lendefi New Token Market", 
+    "lendNEW"
+);
+```
+
+#### Governance Controls
+
+- **Fee Management**: Protocol can adjust token requirements and fees
+- **Asset Approval**: Only pre-approved assets can be used as base assets
+- **Rate Limiting**: Prevents spam while allowing legitimate market creation
+- **Emergency Pause**: Protocol can pause market creation if needed
+
+#### Economic Incentives
+
+- **Fee Collection**: Creation fees are collected by the protocol treasury
+- **Market Ownership**: Creators become market owners with management privileges
+- **Revenue Sharing**: Market owners earn fees from their markets' operations
+- **Token Utility**: Increases utility and value capture for $LEND token holders
 
 ## Technical Implementation
 
@@ -266,15 +308,18 @@ The protocol's architecture aligns with emerging regulations:
 ### Deploying a New Market
 
 ```solidity
-// Deploy factory and set implementations
-LendefiMarketFactory factory = new LendefiMarketFactory();
-factory.initialize(timelock, treasury, assetsModule, govToken, porFeed);
-factory.setImplementations(coreImpl, vaultImpl);
+// Anyone can create markets (permissionless with governance token requirements)
+// Ensure you have the required governance tokens and approve spending
+IERC20(govToken).approve(address(factory), 100 ether); // Approve creation fee
 
-// Create markets for different base assets
+// Create markets for different base assets (fee automatically deducted)
 factory.createMarket(USD1, "Lendefi mUSD1", "mUSD1");
 factory.createMarket(DAI, "Lendefi mDAI", "mDAI");
 factory.createMarket(USDT, "Lendefi mUSDT", "mUSDT");
+
+// Check your governance token balance and markets created
+uint256 balance = IERC20(govToken).balanceOf(msg.sender);
+uint256 marketsCreated = factory.marketsCreatedBy(msg.sender);
 ```
 
 ### Using a Market
@@ -339,7 +384,14 @@ IPROTOCOL.Market memory usdcMarket = factory.getMarketInfo(USDC);
 
 ## Recent Optimizations
 
-The protocol has undergone significant optimizations to improve gas efficiency and user experience:
+The protocol has undergone significant optimizations to improve gas efficiency, user experience, and decentralization:
+
+### Protocol Governance Enhancements
+
+- **Permissionless Market Creation**: Transitioned from admin-only to permissionless market deployment
+- **Governance Token Integration**: Added $LEND token requirements and fees for market creation
+- **Rate Limiting**: Implemented configurable limits to prevent spam while enabling legitimate use
+- **Fee Collection**: Automated governance token fee collection for protocol treasury
 
 ### Gas Optimizations
 
@@ -347,6 +399,13 @@ The protocol has undergone significant optimizations to improve gas efficiency a
 - **Position Vault Initialization**: Combined core and owner initialization into single call
 - **Input Validation**: Optimized validation checks to reduce redundant operations
 - **Storage Packing**: Improved struct packing for reduced storage costs
+
+### Security & Access Control
+
+- **Enhanced Pausability**: Added pause controls for market creation during emergencies
+- **ReentrancyGuard**: Integrated reentrancy protection across critical functions
+- **SafeERC20**: Enhanced token transfer safety with comprehensive error handling
+- **Multi-inheritance Security**: Added multiple security layers (Pausable + ReentrancyGuard)
 
 ### Feature Enhancements
 
@@ -381,7 +440,7 @@ curl -L https://foundry.paradigm.xyz | bash
 foundryup
 
 # Clone and setup
-git clone https://github.com/nebula-labs-xyz/lendefi-markets.git
+git clone https://github.com/LendefiMarkets/lendefi-markets.git
 cd lendefi-markets
 
 # Configure environment

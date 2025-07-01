@@ -64,7 +64,7 @@ contract LendefiGovernor is
      * @notice Default voting period in blocks (approximately 1 week)
      * @dev The period during which voting can occur
      */
-    uint32 public constant DEFAULT_VOTING_PERIOD = 50400; // ~1 week
+    uint32 public constant DEFAULT_VOTING_PERIOD = 7200; // ~1 day
 
     /**
      * @notice Default proposal threshold (20,000 tokens)

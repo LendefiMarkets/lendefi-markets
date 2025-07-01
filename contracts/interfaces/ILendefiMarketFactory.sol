@@ -99,6 +99,63 @@ interface ILendefiMarketFactory {
      */
     event BaseAssetRemoved(address indexed baseAsset, address indexed admin);
 
+    /**
+     * @notice Emitted with comprehensive market details for off-chain indexing
+     * @param marketOwner The address that owns this market instance
+     * @param baseAsset The base asset address for the new market
+     * @param core The deployed LendefiCore contract address
+     * @param vault The deployed LendefiMarketVault contract address
+     * @param assetsModule The deployed LendefiAssets contract address
+     * @param porFeed The deployed PoR feed address
+     * @param name The name of the ERC20 yield token
+     * @param symbol The symbol of the ERC20 yield token
+     * @param decimals The decimals of the base asset
+     * @param createdAt The timestamp when market was created
+     */
+    event MarketCreatedDetailed(
+        address indexed marketOwner,
+        address indexed baseAsset,
+        address core,
+        address vault,
+        address assetsModule,
+        address porFeed,
+        string name,
+        string symbol,
+        uint8 decimals,
+        uint256 createdAt
+    );
+
+    /**
+     * @notice Emitted when max markets per address is updated
+     * @param oldMax The previous maximum
+     * @param newMax The new maximum
+     * @param admin The address that updated the maximum
+     */
+    event MaxMarketsPerAddressUpdated(uint256 oldMax, uint256 newMax, address indexed admin);
+
+    /**
+     * @notice Emitted when governance tokens are withdrawn
+     * @param to The address tokens were sent to
+     * @param amount The amount of governance tokens withdrawn
+     */
+    event GovTokensWithdrawn(address indexed to, uint256 amount);
+
+    /**
+     * @notice Emitted when required governance balance is updated
+     * @param oldBalance The previous required balance
+     * @param newBalance The new required balance
+     * @param admin The address that updated the balance
+     */
+    event RequiredGovBalanceUpdated(uint256 oldBalance, uint256 newBalance, address indexed admin);
+
+    /**
+     * @notice Emitted when new market fee is updated
+     * @param oldAmount The previous required transfer amount
+     * @param newAmount The new required transfer amount
+     * @param admin The address that updated the amount
+     */
+    event NewMarketFeeUpdated(uint256 oldAmount, uint256 newAmount, address indexed admin);
+
     // ========== ERRORS ==========
 
     /// @notice Thrown when attempting to create a market for an owner/asset pair that already exists
@@ -134,6 +191,24 @@ interface ILendefiMarketFactory {
     /// @notice Thrown when an invalid index is provided for array access
     error InvalidIndex();
 
+    /// @notice Thrown when insufficient governance token balance for market creation
+    error InsufficientGovTokenBalance();
+
+    /// @notice Thrown when maximum markets per address limit is reached
+    error MaxMarketsReached();
+
+    /// @notice Thrown when a parameter value is zero when it should be greater than zero
+    error InvalidZeroValue();
+
+    /// @notice Thrown when no governance tokens are available to withdraw
+    error NoTokensToWithdraw();
+
+    /// @notice Thrown when invalid string parameters are provided
+    error InvalidStringParameter();
+
+    /// @notice Thrown when ERC20 token has invalid properties
+    error InvalidTokenProperties();
+
     // ========== INITIALIZATION ==========
 
     /**
@@ -142,18 +217,18 @@ interface ILendefiMarketFactory {
      * @param _govToken Address of the protocol governance token
      * @param _multisig Address of the multisig wallet
      * @param _ecosystem Address of the ecosystem contract for rewards
-     * @param _networkUSDC Network-specific USDC address for oracle validation
-     * @param _networkWETH Network-specific WETH address for oracle validation
-     * @param _UsdcWethPool Network-specific USDC/WETH pool for price reference
+     * @param _networkBase Network-specific base stablecoin address for oracle validation
+     * @param _networkWrappedNative Network-specific wrapped native token address for oracle validation
+     * @param _primaryPool Network-specific base/wrapped native pool for price reference
      */
     function initialize(
         address _timelock,
         address _govToken,
         address _multisig,
         address _ecosystem,
-        address _networkUSDC,
-        address _networkWETH,
-        address _UsdcWethPool
+        address _networkBase,
+        address _networkWrappedNative,
+        address _primaryPool
     ) external;
 
     // ========== ADMIN FUNCTIONS ==========
@@ -177,14 +252,16 @@ interface ILendefiMarketFactory {
     /**
      * @notice Adds a base asset to the allowlist for market creation
      * @param baseAsset Address of the base asset to add to the allowlist
+     * @return True if the asset was added, false if it was already in the allowlist
      */
-    function addAllowedBaseAsset(address baseAsset) external;
+    function addAllowedBaseAsset(address baseAsset) external returns (bool);
 
     /**
      * @notice Removes a base asset from the allowlist for market creation
      * @param baseAsset Address of the base asset to remove from the allowlist
+     * @return True if the asset was removed, false if it was not in the allowlist
      */
-    function removeAllowedBaseAsset(address baseAsset) external;
+    function removeAllowedBaseAsset(address baseAsset) external returns (bool);
 
     // ========== MARKET MANAGEMENT ==========
 
@@ -206,6 +283,42 @@ interface ILendefiMarketFactory {
      * @notice Cancels a previously scheduled upgrade
      */
     function cancelUpgrade() external;
+
+    /**
+     * @notice Updates the maximum markets allowed per address
+     * @param newMax The new maximum number of markets per address
+     */
+    function setMaxMarketsPerAddress(uint256 newMax) external;
+
+    /**
+     * @notice Updates the required governance token balance for market creation
+     * @param newBalance The new required balance amount
+     */
+    function setRequiredGovBalance(uint256 newBalance) external;
+
+    /**
+     * @notice Updates the governance token fee required for market creation
+     * @param newAmount The new required transfer amount
+     */
+    function setNewMarketFee(uint256 newAmount) external;
+
+    /**
+     * @notice Withdraws collected governance tokens to the multisig address
+     * @dev Transfers all collected governance tokens from market creation fees to the multisig wallet
+     */
+    function withdrawGovTokens() external;
+
+    /**
+     * @notice Pauses market creation
+     * @dev Prevents new markets from being created while allowing existing operations to continue
+     */
+    function pause() external;
+
+    /**
+     * @notice Unpauses market creation
+     * @dev Allows market creation to resume after being paused
+     */
+    function unpause() external;
 
     // ========== VIEW FUNCTIONS ==========
 
@@ -300,31 +413,6 @@ interface ILendefiMarketFactory {
     function getOwnerBaseAssets(address marketOwner) external view returns (address[] memory);
 
     /**
-     * @notice Returns all active markets across all owners
-     * @return Array containing Market structs of all active markets
-     */
-    function getAllActiveMarkets() external view returns (IPROTOCOL.Market[] memory);
-
-    /**
-     * @notice Returns the total number of market owners
-     * @return Total number of unique market owners
-     */
-    function getMarketOwnersCount() external view returns (uint256);
-
-    /**
-     * @notice Returns a market owner address by index
-     * @param index The index of the owner to retrieve
-     * @return Address of the market owner at the specified index
-     */
-    function getMarketOwnerByIndex(uint256 index) external view returns (address);
-
-    /**
-     * @notice Returns the total number of markets created across all owners
-     * @return Total number of markets created
-     */
-    function getTotalMarketsCount() external view returns (uint256);
-
-    /**
      * @notice Returns the remaining time before a scheduled upgrade can be executed
      * @return timeRemaining The time remaining in seconds
      */
@@ -337,12 +425,6 @@ interface ILendefiMarketFactory {
      * @return exists Whether an upgrade is pending
      */
     function pendingUpgrade() external view returns (address implementation, uint64 scheduledTime, bool exists);
-
-    /**
-     * @notice Returns all market owners as an array
-     * @return Array of all market owner addresses
-     */
-    function getAllMarketOwners() external view returns (address[] memory);
 
     /**
      * @notice Checks if a base asset is allowed for market creation

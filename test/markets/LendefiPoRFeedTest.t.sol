@@ -5,13 +5,18 @@ import "../BasicDeploy.sol";
 import {LendefiPoRFeed} from "../../contracts/markets/LendefiPoRFeed.sol";
 import {TokenMock} from "../../contracts/mock/TokenMock.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-
+import {IPoRFeed} from "../../contracts/interfaces/IPoRFeed.sol";
+import {IASSETS} from "../../contracts/interfaces/IASSETS.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 /**
  * @title LendefiPoRFeedTest
  * @notice Comprehensive test suite for LendefiPoRFeed contract
  * @dev Tests all functions, error cases, and edge conditions for complete coverage
  */
+
 contract LendefiPoRFeedTest is BasicDeploy {
+    using Clones for address;
+
     LendefiPoRFeed public porFeed;
     TokenMock public testToken;
 
@@ -80,6 +85,27 @@ contract LendefiPoRFeedTest is BasicDeploy {
     function test_Revert_Initialize_Twice() public {
         vm.expectRevert();
         porFeed.initialize(address(testToken), testUpdater, testOwner);
+    }
+
+    /*
+    @notice Test cloning the PoR feed and initializing it
+    @dev This tests that the clone can be initialized correctly
+    @dev It also checks that trying to initialize a clone twice reverts
+    The test is demonstrating that clones
+    maintain independent storage
+    state even when created from an
+    already-initialized implementation.
+    */
+    function test_Revert_Initialize_Clone_Twice() public {
+        address newPorFeedAddr = Clones.clone(address(porFeed));
+        // Verify clone was successful
+        if (newPorFeedAddr == address(0)) revert IASSETS.CloneDeploymentFailed();
+        if (newPorFeedAddr.code.length == 0) revert IASSETS.CloneDeploymentFailed();
+        // Initialize the clone from already initialized implementation
+        IPoRFeed(newPorFeedAddr).initialize(address(testToken), testUpdater, testOwner);
+
+        vm.expectRevert(abi.encodeWithSignature("InvalidInitialization()"));
+        IPoRFeed(newPorFeedAddr).initialize(address(testToken), testUpdater, testOwner);
     }
 
     // ========== UPDATE ANSWER TESTS ==========

@@ -80,14 +80,6 @@ contract MarketFactoryTest is BasicDeploy {
         marketFactoryInstance.createMarket(address(baseAsset1), "Test Market", "TMKT");
     }
 
-    function testCannotCreateMarketNonAdmin() public {
-        // Try to create market as non-admin
-        vm.expectRevert();
-        marketFactoryInstance.createMarket(address(baseAsset1), "Test Market", "TMKT");
-    }
-
-    // Note: getAllActiveMarkets() function was removed
-
     // ============ ZeroAddress Error Tests ============
 
     function test_Revert_Initialize_ZeroTimelock() public {

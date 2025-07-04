@@ -165,7 +165,23 @@ contract LendefiMarketVault_TestOne is BasicDeploy {
     }
 
     // ========== CHAINLINK AUTOMATION TESTS ==========
-    // Note: checkUpkeep tests were removed - functionality replaced with reward system
+    function test_CheckUpkeep_WhenIntervalPassed() public {
+        vm.warp(block.timestamp + 13 hours);
+
+        (bool upkeepNeeded, bytes memory performData) = marketVaultInstance.checkUpkeep("");
+
+        assertTrue(upkeepNeeded, "Upkeep should be needed after interval");
+        assertEq(performData, "0x00", "Perform data should be empty");
+    }
+
+    function test_CheckUpkeep_WhenIntervalNotPassed() public {
+        vm.warp(block.timestamp + 6 hours);
+
+        (bool upkeepNeeded, bytes memory performData) = marketVaultInstance.checkUpkeep("");
+
+        assertFalse(upkeepNeeded, "Upkeep should not be needed before interval");
+        assertEq(performData, "0x00", "Perform data should be empty");
+    }
 
     function test_PerformUpkeep_UpdatesStateWhenIntervalPassed() public {
         uint256 initialCounter = marketVaultInstance.counter();

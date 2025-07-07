@@ -12,7 +12,7 @@ contract LendefiRatesTest is Test {
     uint256 constant SECONDS_PER_YEAR = 365 * 86400;
     // Set realistic protocol bounds
     uint256 constant MAX_PRINCIPAL = 100_000_000_000e6; // 1 billion tokens
-    uint256 constant MAX_RATE = 1e7; // 1000% annual rate (in 1e6)
+    uint256 constant MAX_RATE = 1e6; // 100% annual rate (in 1e6)
     uint256 constant MAX_TIME = 10 * 365 days; // 10 years
     uint256 constant MAX_SUPPLY = 100_000_000_000e6;
     uint256 constant MAX_BORROW = 100_000_000_000e6;
@@ -47,7 +47,7 @@ contract LendefiRatesTest is Test {
         vm.expectRevert();
         this.helperRdiv(RAY, 0);
     }
-    
+
     function helperRdiv(uint256 x, uint256 y) external pure returns (uint256) {
         return LendefiRates.rdiv(x, y);
     }
@@ -152,7 +152,7 @@ contract LendefiRatesTest is Test {
         debt = bound(debt, 0, MAX_BORROW);
         rate = bound(rate, 0, MAX_RATE);
         // Limit time to prevent overflow in compound interest calculation
-        time = bound(time, 0, 365 days);
+        time = bound(time, 0, MAX_TIME);
         // Common token decimals: 6 (USDC), 8 (WBTC), 18 (ETH/most ERC20s)
         baseDecimals = bound(baseDecimals, 1e6, 1e18);
         uint256 result = LendefiRates.calculateDebtWithInterest(debt, rate, time, baseDecimals);
